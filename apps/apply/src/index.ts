@@ -31,6 +31,7 @@ import { AttioClient, AttioError } from './attio.js';
 import {
   decide,
   parseAllowlist,
+  parseFieldMap,
   parseProposedChanges,
   parseSourceMessageIds,
   partitionDealChanges,
@@ -44,7 +45,8 @@ export interface Env {
   // vars (strings in wrangler.jsonc)
   AUTO_APPLY_CONFIDENCE_THRESHOLD?: string;
   SAFE_ATTRIBUTE_ALLOWLIST?: string;
-  DEAL_SAFE_ATTRIBUTE_ALLOWLIST?: string;
+  /** Claude-slug=attio-slug pairs, comma-separated (deal field mapping). */
+  DEAL_FIELD_MAP?: string;
   ATTIO_PEOPLE_MATCHING_ATTRIBUTE?: string;
   /** The Deals attribute that holds associated people (record reference). */
   ATTIO_DEAL_PEOPLE_ATTRIBUTE?: string;
@@ -71,9 +73,8 @@ function loadConfig(env: Env): ApplyConfig {
     safeAttributeAllowlist: parseAllowlist(
       env.SAFE_ATTRIBUTE_ALLOWLIST ?? 'phone,phone_numbers,email,email_addresses,job_title,title'
     ),
-    dealSafeAttributeAllowlist: parseAllowlist(
-      env.DEAL_SAFE_ATTRIBUTE_ALLOWLIST ??
-        'next_step,next_steps,next_step_date,last_touch,last_touch_date,last_contacted'
+    dealFieldMap: parseFieldMap(
+      env.DEAL_FIELD_MAP ?? 'next_step=next_due_task_4,next_step_date=next_due_task_date'
     ),
   };
 }
@@ -210,11 +211,10 @@ async function applyDeal(
   const participants = parseParticipants(p);
   const dealId = p.attio_record_id!; // effective confirmed deal id (resolved in run())
   const peopleAttr = env.ATTIO_DEAL_PEOPLE_ATTRIBUTE ?? 'associated_people';
-  // For a human-approved deal, write everything; otherwise only allowlisted fields.
-  const { write, review } =
-    p.status === 'approved'
-      ? { write: changes, review: {} as Record<string, unknown> }
-      : partitionDealChanges(changes, cfg.dealSafeAttributeAllowlist);
+  // Only mapped fields are writable (to their real Attio slug); the rest are
+  // surfaced in the note. Applies to approved + auto alike — you can't write a
+  // field that has no Attio target.
+  const { write, review } = partitionDealChanges(changes, cfg.dealFieldMap);
 
   try {
     // 1. CRITICAL: provenance note first — it is the deliverable + traceability,

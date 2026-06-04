@@ -12,7 +12,10 @@ import {
 const cfg: ApplyConfig = {
   autoApplyConfidenceThreshold: 0.85,
   safeAttributeAllowlist: new Set(['email', 'phone', 'title']),
-  dealSafeAttributeAllowlist: new Set(['next_step', 'next_step_date', 'last_touch_date']),
+  dealFieldMap: new Map([
+    ['next_step', 'next_due_task_4'],
+    ['next_step_date', 'next_due_task_date'],
+  ]),
 };
 
 function proposal(over: Partial<Proposal> = {}): Proposal {
@@ -87,18 +90,21 @@ describe('decide — deal proposals (note-centric)', () => {
   });
 });
 
-describe('partitionDealChanges — what auto-writes vs. surfaces for review', () => {
-  const allow = new Set(['next_step', 'last_touch_date']);
-  it('splits allowlisted (write) from stage/commercial (review)', () => {
+describe('partitionDealChanges — maps Claude slugs to real Attio slugs', () => {
+  const map = new Map([
+    ['next_step', 'next_due_task_4'],
+    ['next_step_date', 'next_due_task_date'],
+  ]);
+  it('writes mapped fields under their Attio slug; surfaces the rest for review', () => {
     const { write, review } = partitionDealChanges(
-      { next_step: 'call Tue', last_touch_date: '2026-06-04', stage: 'won', amount: 100 },
-      allow
+      { next_step: 'call Tue', next_step_date: '2026-06-10', stage: 'won', last_touch_date: '2026-06-04' },
+      map
     );
-    expect(write).toEqual({ next_step: 'call Tue', last_touch_date: '2026-06-04' });
-    expect(review).toEqual({ stage: 'won', amount: 100 });
+    expect(write).toEqual({ next_due_task_4: 'call Tue', next_due_task_date: '2026-06-10' });
+    expect(review).toEqual({ stage: 'won', last_touch_date: '2026-06-04' });
   });
-  it('an empty allowlist routes ALL fields to review (note-only workspace)', () => {
-    const { write, review } = partitionDealChanges({ next_step: 'x', stage: 'won' }, new Set());
+  it('an empty map routes ALL fields to review (note-only)', () => {
+    const { write, review } = partitionDealChanges({ next_step: 'x', stage: 'won' }, new Map());
     expect(write).toEqual({});
     expect(review).toEqual({ next_step: 'x', stage: 'won' });
   });

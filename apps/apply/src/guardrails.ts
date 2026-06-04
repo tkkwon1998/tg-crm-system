@@ -24,8 +24,13 @@ export interface ApplyConfig {
   autoApplyConfidenceThreshold: number;
   /** lower-cased, trimmed safe attribute slugs for PEOPLE proposals */
   safeAttributeAllowlist: Set<string>;
-  /** lower-cased, trimmed safe (non-stage) attribute slugs for DEAL proposals */
-  dealSafeAttributeAllowlist: Set<string>;
+  /**
+   * DEAL field map: Claude semantic slug (lower-cased) -> real Attio deal
+   * attribute slug. Only mapped fields are written (to the mapped slug);
+   * everything else is surfaced in the note for review. e.g.
+   * next_step -> next_due_task_4, next_step_date -> next_due_task_date.
+   */
+  dealFieldMap: Map<string, string>;
 }
 
 /** Slugs that, if present in proposed_changes, indicate a deal-stage move. */
@@ -114,19 +119,31 @@ export function decide(p: Proposal, cfg: ApplyConfig): Decision {
     : { kind: 'skip', reason: `object '${p.attio_object}' requires explicit human approval` };
 }
 
+/** Parse "claudeSlug=attioSlug,..." into a Map (claude slug lower-cased). */
+export function parseFieldMap(raw: string | undefined): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const pair of (raw ?? '').split(',')) {
+    const [k, v] = pair.split('=').map((s) => s.trim());
+    if (k && v) m.set(k.toLowerCase(), v);
+  }
+  return m;
+}
+
 /**
- * Split a deal proposal's changes into auto-writable (allowlisted, non-stage)
- * vs review-only (everything else — stage/commercial/unknown). The review set is
- * surfaced in the provenance note, not written to Attio.
+ * Split a deal proposal's changes into auto-writable vs review-only using the
+ * field map. A change whose Claude slug is mapped becomes a `write` keyed by the
+ * REAL Attio slug; everything else (stage/commercial/unmapped) goes to `review`
+ * (surfaced in the provenance note, never written).
  */
 export function partitionDealChanges(
   changes: Record<string, unknown>,
-  allowlist: Set<string>
+  fieldMap: Map<string, string>
 ): { write: Record<string, unknown>; review: Record<string, unknown> } {
   const write: Record<string, unknown> = {};
   const review: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(changes)) {
-    if (allowlist.has(k.trim().toLowerCase())) write[k] = v;
+    const attioSlug = fieldMap.get(k.trim().toLowerCase());
+    if (attioSlug) write[attioSlug] = v;
     else review[k] = v;
   }
   return { write, review };
