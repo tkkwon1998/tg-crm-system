@@ -20,6 +20,7 @@ import type {
   Proposal,
   ProposalInput,
   ProposalStatus,
+  SystemStatus,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -277,6 +278,38 @@ export async function confirmIdentity(
     confidence: 1,
     match_method: matchMethod,
   });
+}
+
+// ===========================================================================
+// system_status (heartbeat / liveness)
+// ===========================================================================
+
+/** Record a component's heartbeat (upsert). ok=false marks the last run failed. */
+export async function recordStatus(
+  db: D1Database,
+  component: string,
+  ok: boolean,
+  detail?: string | null
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO system_status (component, updated_at, ok, detail)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (component) DO UPDATE SET
+         updated_at = excluded.updated_at,
+         ok         = excluded.ok,
+         detail     = excluded.detail`
+    )
+    .bind(component, now(), ok ? 1 : 0, detail ?? null)
+    .run();
+}
+
+/** Read a component's last heartbeat, or null if it has never run. */
+export async function getStatus(db: D1Database, component: string): Promise<SystemStatus | null> {
+  return await db
+    .prepare(`SELECT * FROM system_status WHERE component = ?1`)
+    .bind(component)
+    .first<SystemStatus>();
 }
 
 // ===========================================================================

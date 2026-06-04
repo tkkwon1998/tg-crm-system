@@ -24,6 +24,16 @@ export type ProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected';
 /** crm_proposals.suggested_action and the Claude output's suggested_action */
 export type SuggestedAction = 'bump' | 'follow_up' | 'none';
 
+/** A per-component liveness/heartbeat row in system_status. */
+export interface SystemStatus {
+  component: string;
+  /** unix seconds of the last recorded run */
+  updated_at: number;
+  /** 0/1: did the last run succeed */
+  ok: 0 | 1;
+  detail: string | null;
+}
+
 /** Attio object slug a proposal targets. People is the default/primary object. */
 export type AttioObject = 'people' | 'companies' | 'deals';
 

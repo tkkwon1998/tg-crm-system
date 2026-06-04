@@ -23,13 +23,17 @@
   // Non-secret thresholds (spec §5.5). Tune without redeploying secrets.
   // SLACK_WEBHOOK_URL + HEALTHCHECK_URL are SECRETS — set via `wrangler secret put`.
   "vars": {
-    // Alert if the newest ingested message is older than this many seconds
-    // (ingestion stalled / Telegram session de-authed). Ingest cron is 1 min;
-    // 900s = 15 min gives ample slack for transient misses before paging.
-    "FRESHNESS_MAX_AGE_SECONDS": 900,
+    // Alert if the ingest heartbeat is older than this many seconds — i.e. ingest
+    // has not completed a run (cron not firing / worker erroring). This is a
+    // LIVENESS check, independent of message traffic, so a quiet inbox never
+    // pages. Ingest cron is 1 min; 600s = 10 min tolerates transient misses.
+    "INGEST_MAX_SILENCE_SECONDS": 600,
     // Alert if crm_proposals 'pending' count exceeds this ceiling (apply stalled
     // / review backlog runaway).
-    "PENDING_PROPOSALS_CEILING": 200
+    "PENDING_PROPOSALS_CEILING": 200,
+    // Don't re-send the SAME Slack alert more often than this while still broken
+    // (anti-spam). A changed failing set alerts immediately regardless.
+    "ALERT_COOLDOWN_SECONDS": 3600
   },
 
   "observability": {

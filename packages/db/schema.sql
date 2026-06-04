@@ -110,3 +110,17 @@ CREATE TABLE IF NOT EXISTS deal_map (
 
 CREATE INDEX IF NOT EXISTS idx_deal_map_status ON deal_map (status);
 CREATE INDEX IF NOT EXISTS idx_deal_map_deal   ON deal_map (attio_deal_id);
+
+-- =====================================================================
+-- system_status — per-component heartbeat / liveness.
+--   The watchdog reads the 'ingest' row to detect a true stall (no recent
+--   successful run) or a failed run (session de-auth), instead of conflating
+--   "no new messages" with "ingestion broken". Also stores 'watchdog' alert
+--   state (last alert time + failing-check signature) for cooldown/dedup.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS system_status (
+  component   TEXT PRIMARY KEY,            -- 'ingest' | 'watchdog' | ...
+  updated_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+  ok          INTEGER NOT NULL DEFAULT 1,  -- 0/1: did the last run succeed
+  detail      TEXT                         -- human-readable or JSON detail
+);

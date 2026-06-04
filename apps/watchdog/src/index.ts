@@ -1,55 +1,56 @@
 /**
- * watchdog Worker (spec §5.5).
+ * watchdog Worker (spec §5.5) — liveness-based.
  *
- * Runs on cron every 5 minutes. Two health checks, both read from D1 via the
- * @crm/db client (never hand-rolled SQL):
+ * Runs on cron every 5 minutes. Checks (read from D1 via @crm/db):
  *
- *   1. Freshness — max(msg_date) must be within FRESHNESS_MAX_AGE_SECONDS of now.
- *      A stale newest message means ingestion stalled or the Telegram session
- *      was de-authed.
- *   2. Queue depth — crm_proposals 'pending' count must not exceed
- *      PENDING_PROPOSALS_CEILING. A runaway pending count means apply stalled
- *      or review is falling behind.
+ *   1. Ingest liveness — the 'ingest' heartbeat in system_status must be recent
+ *      AND its last run must have succeeded. This detects a REAL stall (ingest
+ *      stopped running) or a failed run (Telegram session de-authed / container
+ *      error). It deliberately does NOT look at message age: a quiet inbox is
+ *      not a failure, and the old max(msg_date) check false-alarmed every 5 min
+ *      on low-traffic accounts.
+ *   2. Queue depth — crm_proposals 'pending' count must not exceed the ceiling.
  *
- * Failure semantics (the whole point of a watchdog):
- *   - On ANY failed check: POST a human-readable alert to the Slack webhook.
- *   - Ping the dead-man's-switch HEALTHCHECK_URL ONLY when every check passes.
- *     The ABSENCE of a ping is what pages you (e.g. healthchecks.io), so a
- *     watchdog that itself dies still surfaces — we never ping on failure and
- *     never ping if the run throws.
- *
- * Everything here is observable from a terminal via `wrangler tail watchdog`.
+ * Alerting:
+ *   - On failure: POST a Slack alert, but only when the failing set CHANGES or a
+ *     cooldown has elapsed (no re-paging every 5 min while still broken).
+ *   - On full success: ping the dead-man's-switch HEALTHCHECK_URL (its absence
+ *     pages you). On recovery, post a one-line "all clear".
+ *   - Alert state (signature + last alert time) is persisted in system_status.
  */
 
-import { getNewestMessageDate, countByStatus } from '@crm/db';
-import type { ProposalStatus } from '@crm/db';
+import { getStatus, recordStatus, countByStatus } from '@crm/db';
+import type { ProposalStatus, SystemStatus } from '@crm/db';
 
 export interface Env {
-  /** Shared D1 (binding MUST be "DB"). */
   DB: D1Database;
-
-  // --- secrets (wrangler secret put) ---
-  /** Slack Incoming Webhook URL for alerts. */
   SLACK_WEBHOOK_URL: string;
-  /** Dead-man's-switch URL (e.g. healthchecks.io). Pinged only on full success. */
   HEALTHCHECK_URL: string;
 
-  // --- non-secret config (wrangler.jsonc vars; JSON numbers arrive as numbers,
-  //     but treat defensively in case they are provided as strings) ---
-  FRESHNESS_MAX_AGE_SECONDS?: number | string;
+  // non-secret config (wrangler.jsonc vars)
+  /** Max seconds the ingest heartbeat may be stale before it's a stall. */
+  INGEST_MAX_SILENCE_SECONDS?: number | string;
+  /** Pending-proposal ceiling. */
   PENDING_PROPOSALS_CEILING?: number | string;
+  /** Min seconds between repeat Slack alerts for the SAME failing set. */
+  ALERT_COOLDOWN_SECONDS?: number | string;
 }
 
-/** Defaults mirror wrangler.jsonc; used if a var is missing/unparseable. */
-const DEFAULT_FRESHNESS_MAX_AGE_SECONDS = 900; // 15 min
+const DEFAULT_INGEST_MAX_SILENCE_SECONDS = 600; // 10 min (ingest cron is 1 min)
 const DEFAULT_PENDING_PROPOSALS_CEILING = 200;
+const DEFAULT_ALERT_COOLDOWN_SECONDS = 3600; // re-alert at most hourly while broken
 
-/** One health-check outcome. */
 interface CheckResult {
   name: string;
   ok: boolean;
-  /** One-line, human-readable detail for logs + Slack. */
   detail: string;
+}
+
+interface AlertState {
+  /** Sorted, comma-joined names of currently-failing checks (''=all green). */
+  signature: string;
+  /** Unix seconds of the last Slack alert sent. */
+  lastAlertAt: number;
 }
 
 function toInt(value: number | string | undefined, fallback: number): number {
@@ -65,35 +66,69 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-/** Check 1: ingestion freshness. */
-async function checkFreshness(env: Env, now: number): Promise<CheckResult> {
-  const maxAge = toInt(env.FRESHNESS_MAX_AGE_SECONDS, DEFAULT_FRESHNESS_MAX_AGE_SECONDS);
-  const newest = await getNewestMessageDate(env.DB);
+// ---------------------------------------------------------------------------
+// pure check / decision logic (exported for tests)
+// ---------------------------------------------------------------------------
 
-  if (newest === null) {
-    // No messages at all. Before any ingestion has happened this is expected,
-    // but a watchdog that stayed silent here would hide a never-started pipeline.
-    // Treat an empty store as stale so the operator notices a system that never
-    // produced data.
+/**
+ * Evaluate ingest liveness from its heartbeat. Liveness, not message recency:
+ * a healthy run with zero new messages still counts as alive.
+ */
+export function evaluateIngestLiveness(
+  hb: Pick<SystemStatus, 'updated_at' | 'ok' | 'detail'> | null,
+  now: number,
+  maxSilence: number
+): CheckResult {
+  if (hb === null) {
     return {
-      name: 'freshness',
+      name: 'ingest_liveness',
       ok: false,
-      detail: `no messages in telegram_messages yet (max(msg_date) is NULL); ingestion has never produced data`,
+      detail: 'ingest has never recorded a run (pipeline not started?)',
     };
   }
-
-  const age = now - newest;
-  const ok = age <= maxAge;
-  return {
-    name: 'freshness',
-    ok,
-    detail: ok
-      ? `newest message ${age}s old (<= ${maxAge}s threshold)`
-      : `STALE: newest message ${age}s old (> ${maxAge}s threshold) — ingestion stalled or Telegram session de-authed`,
-  };
+  if (hb.ok === 0) {
+    return {
+      name: 'ingest_liveness',
+      ok: false,
+      detail: `ingest last run FAILED — likely Telegram session de-auth or container error: ${hb.detail ?? '(no detail)'}`,
+    };
+  }
+  const age = now - hb.updated_at;
+  if (age > maxSilence) {
+    return {
+      name: 'ingest_liveness',
+      ok: false,
+      detail: `STALLED: ingest has not run in ${age}s (> ${maxSilence}s threshold) — cron not firing or worker erroring`,
+    };
+  }
+  return { name: 'ingest_liveness', ok: true, detail: `ingest ran ${age}s ago, last run OK` };
 }
 
-/** Check 2: pending proposal queue depth. */
+/**
+ * Decide whether to send a Slack alert now: only when the failing set changed
+ * since the last alert, or the cooldown has elapsed. Prevents 5-minute spam.
+ */
+export function shouldAlert(
+  signature: string,
+  prev: AlertState,
+  now: number,
+  cooldown: number
+): boolean {
+  if (signature === '') return false; // nothing failing
+  if (signature !== prev.signature) return true; // new/changed failure
+  return now - prev.lastAlertAt >= cooldown; // same failure, but cooldown elapsed
+}
+
+// ---------------------------------------------------------------------------
+// checks
+// ---------------------------------------------------------------------------
+
+async function checkIngestLiveness(env: Env, now: number): Promise<CheckResult> {
+  const maxSilence = toInt(env.INGEST_MAX_SILENCE_SECONDS, DEFAULT_INGEST_MAX_SILENCE_SECONDS);
+  const hb = await getStatus(env.DB, 'ingest');
+  return evaluateIngestLiveness(hb, now, maxSilence);
+}
+
 async function checkQueueDepth(env: Env): Promise<CheckResult> {
   const ceiling = toInt(env.PENDING_PROPOSALS_CEILING, DEFAULT_PENDING_PROPOSALS_CEILING);
   const counts: Record<ProposalStatus, number> = await countByStatus(env.DB);
@@ -108,73 +143,92 @@ async function checkQueueDepth(env: Env): Promise<CheckResult> {
   };
 }
 
-/** POST a Slack alert. Best-effort: log on failure but never throw past here. */
-async function postSlackAlert(env: Env, failed: CheckResult[], now: number): Promise<void> {
+// ---------------------------------------------------------------------------
+// Slack / healthcheck
+// ---------------------------------------------------------------------------
+
+async function postSlack(env: Env, text: string): Promise<void> {
   if (!env.SLACK_WEBHOOK_URL) {
-    console.error('watchdog: SLACK_WEBHOOK_URL is not set; cannot send alert');
+    console.error('watchdog: SLACK_WEBHOOK_URL not set; cannot send Slack message');
     return;
   }
-
-  const iso = new Date(now * 1000).toISOString();
-  const lines = failed.map((c) => `• *${c.name}*: ${c.detail}`).join('\n');
-  const text = `:rotating_light: *CRM watchdog* detected ${failed.length} failing check(s) at ${iso}\n${lines}`;
-
   try {
     const res = await fetch(env.SLACK_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-    if (!res.ok) {
-      console.error(`watchdog: Slack webhook returned ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) console.error(`watchdog: Slack webhook returned ${res.status} ${res.statusText}`);
   } catch (err) {
-    console.error('watchdog: failed to POST Slack alert:', err);
+    console.error('watchdog: failed to POST Slack:', err);
   }
 }
 
-/** Ping the dead-man's-switch. Called ONLY when all checks pass. */
 async function pingHealthcheck(env: Env): Promise<void> {
   if (!env.HEALTHCHECK_URL) {
-    console.error('watchdog: HEALTHCHECK_URL is not set; cannot ping dead-man switch');
+    console.error('watchdog: HEALTHCHECK_URL not set; cannot ping dead-man switch');
     return;
   }
   try {
     const res = await fetch(env.HEALTHCHECK_URL, { method: 'GET' });
-    if (!res.ok) {
-      console.error(`watchdog: healthcheck ping returned ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) console.error(`watchdog: healthcheck ping returned ${res.status}`);
   } catch (err) {
     console.error('watchdog: failed to ping healthcheck:', err);
   }
 }
 
-/**
- * Run all checks, alert on failures, ping on full success.
- * Returns the check results so it can be exercised from both cron and fetch.
- */
+// ---------------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------------
+
+async function loadAlertState(env: Env): Promise<AlertState> {
+  const row = await getStatus(env.DB, 'watchdog');
+  if (row?.detail) {
+    try {
+      const s = JSON.parse(row.detail) as Partial<AlertState>;
+      return { signature: s.signature ?? '', lastAlertAt: s.lastAlertAt ?? 0 };
+    } catch {
+      /* fall through */
+    }
+  }
+  return { signature: '', lastAlertAt: 0 };
+}
+
 async function runWatchdog(env: Env): Promise<CheckResult[]> {
   const now = nowSeconds();
 
-  // Run the independent reads concurrently.
-  const [freshness, queueDepth] = await Promise.all([
-    checkFreshness(env, now),
+  const [liveness, queueDepth] = await Promise.all([
+    checkIngestLiveness(env, now),
     checkQueueDepth(env),
   ]);
-  const results = [freshness, queueDepth];
-
+  const results = [liveness, queueDepth];
   for (const r of results) {
     console.log(`watchdog check ${r.name}: ${r.ok ? 'OK' : 'FAIL'} — ${r.detail}`);
   }
 
   const failed = results.filter((r) => !r.ok);
+  const signature = failed.map((r) => r.name).sort().join(',');
+  const prev = await loadAlertState(env);
+  const cooldown = toInt(env.ALERT_COOLDOWN_SECONDS, DEFAULT_ALERT_COOLDOWN_SECONDS);
 
   if (failed.length > 0) {
-    // Alert loudly. Do NOT ping the healthcheck — the missing ping is the page.
-    await postSlackAlert(env, failed, now);
-    console.error(`watchdog: ${failed.length} check(s) failed; Slack alerted, healthcheck intentionally NOT pinged`);
+    const iso = new Date(now * 1000).toISOString();
+    if (shouldAlert(signature, prev, now, cooldown)) {
+      const lines = failed.map((c) => `• *${c.name}*: ${c.detail}`).join('\n');
+      await postSlack(env, `:rotating_light: *CRM watchdog* — ${failed.length} failing check(s) at ${iso}\n${lines}`);
+      await recordStatus(env.DB, 'watchdog', false, JSON.stringify({ signature, lastAlertAt: now }));
+      console.error(`watchdog: alerted (${signature}); healthcheck intentionally NOT pinged`);
+    } else {
+      // Still failing but within cooldown — stay quiet, keep prior alert time.
+      await recordStatus(env.DB, 'watchdog', false, JSON.stringify({ signature, lastAlertAt: prev.lastAlertAt }));
+      console.log(`watchdog: ${failed.length} failing (${signature}) but alert suppressed by cooldown`);
+    }
+    // Never ping the dead-man's-switch on failure.
   } else {
-    // All green: feed the dead-man switch so its absence stays meaningful.
+    if (prev.signature !== '') {
+      await postSlack(env, `:white_check_mark: *CRM watchdog* — all checks passing again at ${new Date(now * 1000).toISOString()}`);
+    }
+    await recordStatus(env.DB, 'watchdog', true, JSON.stringify({ signature: '', lastAlertAt: 0 }));
     await pingHealthcheck(env);
     console.log('watchdog: all checks passed; healthcheck pinged');
   }
@@ -183,17 +237,10 @@ async function runWatchdog(env: Env): Promise<CheckResult[]> {
 }
 
 export default {
-  /** Cron entrypoint (every 5 min). */
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // Let alert/ping fetches finish even after the handler returns.
     ctx.waitUntil(runWatchdog(env).then(() => undefined));
   },
 
-  /**
-   * HTTP entrypoint — lets you trigger a check on demand from the terminal
-   * (e.g. `curl https://watchdog.<acct>.workers.dev/`) and see the JSON result.
-   * Returns 200 when all checks pass, 503 when any fail.
-   */
   async fetch(_request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const results = await runWatchdog(env);
     const ok = results.every((r) => r.ok);

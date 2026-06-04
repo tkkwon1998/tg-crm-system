@@ -16,6 +16,7 @@
 import { Container, getContainer } from '@cloudflare/containers';
 import {
   getCursors,
+  recordStatus,
   setCursor,
   upsertMessages,
   type ChatCursor,
@@ -118,9 +119,30 @@ interface FetchResponse {
 // scheduled handler
 // ---------------------------------------------------------------------------
 
+/**
+ * Wrap a run with a heartbeat so the watchdog can tell a true stall / session
+ * de-auth (no recent successful run / a failed run) apart from a merely quiet
+ * inbox. A successful run with 0 new messages STILL records liveness.
+ */
+async function runIngestWithHeartbeat(env: Env): Promise<void> {
+  try {
+    const r = await runIngest(env);
+    await recordStatus(env.DB, 'ingest', true, JSON.stringify(r));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`ingest: run failed: ${msg}`);
+    // Record the failure so the watchdog surfaces it (e.g. session de-authed).
+    try {
+      await recordStatus(env.DB, 'ingest', false, msg.slice(0, 500));
+    } catch (e2) {
+      console.error('ingest: failed to record heartbeat:', e2);
+    }
+  }
+}
+
 export default {
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(runIngest(env));
+    ctx.waitUntil(runIngestWithHeartbeat(env));
   },
 
   // Manual trigger for local dev / backfill smoke tests:
