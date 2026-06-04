@@ -176,15 +176,21 @@ async def _fetch_chat(
     advanced: dict,
 ) -> None:
     """Pull messages with id > min_id for one chat (oldest-first) and record them."""
-    # iter_messages with min_id returns id > min_id; reverse=True yields ascending
-    # so the cursor advances monotonically as we append.
+    # Use offset_id (NOT min_id) with reverse=True: Telethon's min_id is not
+    # reliably applied alongside reverse=True (it re-surfaces already-seen
+    # messages, causing a full re-fetch every run). offset_id + reverse=True
+    # returns id > offset_id in ascending order, so the cursor advances
+    # monotonically. The `mid <= min_id` guard below is a belt-and-suspenders
+    # floor in case the server still hands back a boundary message.
     count = 0
     highest = min_id
     async for msg in client.iter_messages(
-        chat_id, min_id=min_id, limit=fetch_limit, reverse=True
+        chat_id, offset_id=min_id, limit=fetch_limit, reverse=True
     ):
-        count += 1
         mid = int(msg.id)
+        if mid <= min_id:
+            continue  # never re-emit a message at/below the stored cursor
+        count += 1
         if mid > highest:
             highest = mid
 
