@@ -1,0 +1,71 @@
+name: deploy
+
+# Builds the ingest container (GitHub runners have Docker preinstalled, so you
+# never need Docker locally) and deploys the Workers to Cloudflare.
+#
+# Required repo secret:
+#   CLOUDFLARE_API_TOKEN  - a Cloudflare API token scoped to the plex.engineer
+#                           account with Workers Scripts:Edit, D1:Edit, and
+#                           Workers Containers:Edit (see README / setup notes).
+# Account id is not secret and is pinned in each wrangler.jsonc + below.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy.yml'
+
+# Never run two deploys at once.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '4efa81edb9dfe313cb1636ef5f9206f3'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Idempotent: only unapplied migrations run. Safe on every deploy.
+      - name: Apply D1 migrations
+        run: pnpm exec wrangler d1 migrations apply crm --remote --config packages/db/wrangler.jsonc
+
+      # ingest is first and slowest: wrangler builds + pushes the Telethon
+      # container image here (this is the step that needs Docker — provided by
+      # the runner, not your laptop).
+      - name: Deploy ingest (Worker + container)
+        run: pnpm exec wrangler deploy --config apps/ingest/wrangler.jsonc
+
+      - name: Deploy extract
+        run: pnpm exec wrangler deploy --config apps/extract/wrangler.jsonc
+
+      - name: Deploy apply
+        run: pnpm exec wrangler deploy --config apps/apply/wrangler.jsonc
+
+      - name: Deploy watchdog
+        run: pnpm exec wrangler deploy --config apps/watchdog/wrangler.jsonc
+
+      # sync is intentionally NOT deployed yet — it needs the Notion action
+      # database id (apps/sync/wrangler.jsonc NOTION_DATABASE_ID). Once that
+      # exists, add:
+      #   - name: Deploy sync
+      #     run: pnpm exec wrangler deploy --config apps/sync/wrangler.jsonc

@@ -1,0 +1,17 @@
+{
+  // Minimal config used ONLY to apply D1 migrations from the canonical schema
+  // package. It is never deployed as a Worker — the apps own their own configs.
+  // `wrangler d1 migrations apply` reads `migrations_dir` (relative to this file)
+  // and the d1 binding from here.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crm-db-migrations",
+  "account_id": "4efa81edb9dfe313cb1636ef5f9206f3",
+  "compatibility_date": "2025-05-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm",
+      "database_id": "43a788cc-7c4d-4e76-a12f-7a858b8bd17b"
+    }
+  ]
+}

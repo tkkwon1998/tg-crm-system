@@ -1,0 +1,3 @@
+# apply Worker local secrets (spec §8). Copy to apps/apply/.dev.vars (git-ignored).
+# In production: wrangler secret put ATTIO_TOKEN  (run inside apps/apply/)
+ATTIO_TOKEN=

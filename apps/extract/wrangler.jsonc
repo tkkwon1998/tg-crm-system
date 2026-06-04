@@ -1,0 +1,42 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "extract",
+  "account_id": "4efa81edb9dfe313cb1636ef5f9206f3",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // Cron: pick up un-extracted message threads and fan out one Workflow per
+  // thread. Decoupled from ingest's 1-min cron; a few minutes of latency is
+  // acceptable (spec §1 non-goals). Overlaps are safe — getUnextractedMessages
+  // + markMessagesExtracted are idempotent.
+  "triggers": {
+    "crons": ["*/2 * * * *"]
+  },
+
+  // Shared D1 database. Binding name MUST be "DB" (contract). database_id is
+  // filled in by `make bootstrap`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm",
+      "database_id": "43a788cc-7c4d-4e76-a12f-7a858b8bd17b"
+    }
+  ],
+
+  // Durable per-thread pipeline: resolve -> extract -> propose. Binding name
+  // MUST be "EXTRACT_WORKFLOW" (contract).
+  "workflows": [
+    {
+      "binding": "EXTRACT_WORKFLOW",
+      "name": "crm-extract-pipeline",
+      "class_name": "ExtractWorkflow"
+    }
+  ]
+
+  // Secrets (set with `wrangler secret put <NAME>` from this dir, or via
+  // .dev.vars locally): ANTHROPIC_API_KEY, ATTIO_TOKEN.
+}

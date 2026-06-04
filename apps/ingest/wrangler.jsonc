@@ -1,0 +1,71 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ingest",
+  "account_id": "4efa81edb9dfe313cb1636ef5f9206f3",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Cron: catch-up every minute (spec §5.1). Latency bounded by the 1-min floor.
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
+  // Shared D1 database. Binding name MUST be "DB" (contract). database_id is
+  // filled in by `make bootstrap` (one shared "crm" database across all apps).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm",
+      "database_id": "43a788cc-7c4d-4e76-a12f-7a858b8bd17b"
+    }
+  ],
+
+  // Telethon fetcher container. The image is built + pushed from
+  // apps/ingest/container/ automatically by `wrangler deploy`.
+  // Binding name MUST be "INGEST_CONTAINER" (contract). It is backed by the
+  // IngestContainer Durable Object class exported from the Worker.
+  "containers": [
+    {
+      "name": "INGEST_CONTAINER",
+      "class_name": "IngestContainer",
+      "image": "./container/Dockerfile",
+      "max_instances": 1,
+      "instance_type": "standard-1"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INGEST_CONTAINER",
+        "class_name": "IngestContainer"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["IngestContainer"]
+    }
+  ],
+
+  // Non-secret tuning knobs (spec §8: secrets stay out of config).
+  // FETCH_LIMIT_PER_CHAT bounds per-chat work so a cron run stays well under
+  // the 3-min Worker->Container proxy timeout. CONTAINER_TIMEOUT_MS is the
+  // hard cap the Worker enforces on the container call.
+  "vars": {
+    "FETCH_LIMIT_PER_CHAT": "200",
+    "MAX_CHATS_PER_RUN": "0",
+    "CONTAINER_TIMEOUT_MS": "150000"
+  },
+
+  // TG_SESSION / TG_API_ID / TG_API_HASH are Worker secrets (wrangler secret
+  // put) and are forwarded into the container env at invocation time by the
+  // Worker (see src/worker.ts). They are NOT declared as plaintext vars here.
+
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apply",
+  "account_id": "4efa81edb9dfe313cb1636ef5f9206f3",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // Cron-driven (spec §5.4). Runs a few minutes behind ingest/extract; CRM
+  // enrichment tolerates minutes of latency. Idempotent on proposal status,
+  // so overlapping/retried runs are safe.
+  "triggers": {
+    "crons": ["*/2 * * * *"]
+  },
+
+  // Shared D1 — binding name MUST be "DB", database_name "crm". The
+  // database_id is filled in by `make bootstrap`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm",
+      "database_id": "43a788cc-7c4d-4e76-a12f-7a858b8bd17b"
+    }
+  ],
+
+  // Non-secret tuning knobs (spec §8: thresholds live in wrangler.jsonc).
+  // ATTIO_TOKEN is a secret — set with `wrangler secret put ATTIO_TOKEN`.
+  "vars": {
+    // Auto-apply gate: proposals at/above this confidence whose changed
+    // attributes are ALL on the safe allowlist apply without human approval.
+    "AUTO_APPLY_CONFIDENCE_THRESHOLD": "0.9",
+    // Comma-separated safe attribute slugs eligible for auto-apply.
+    "SAFE_ATTRIBUTE_ALLOWLIST": "phone,phone_numbers,email,email_addresses,job_title,title",
+    // Attribute slug used to dedupe (matching_attribute) on assert_person.
+    "ATTIO_PEOPLE_MATCHING_ATTRIBUTE": "email_addresses",
+    // Attio API base.
+    "ATTIO_API_BASE": "https://api.attio.com",
+    // Max proposals processed per cron tick (bounds run time / API spend).
+    "APPLY_BATCH_LIMIT": "50"
+  }
+}

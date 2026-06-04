@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watchdog",
+  "account_id": "4efa81edb9dfe313cb1636ef5f9206f3",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Cron every 5 minutes (spec §5.5). The absence of a healthcheck ping pages you.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  // Shared D1 binding. binding MUST be "DB"; database_id filled in by `make bootstrap`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm",
+      "database_id": "43a788cc-7c4d-4e76-a12f-7a858b8bd17b"
+    }
+  ],
+
+  // Non-secret thresholds (spec §5.5). Tune without redeploying secrets.
+  // SLACK_WEBHOOK_URL + HEALTHCHECK_URL are SECRETS — set via `wrangler secret put`.
+  "vars": {
+    // Alert if the newest ingested message is older than this many seconds
+    // (ingestion stalled / Telegram session de-authed). Ingest cron is 1 min;
+    // 900s = 15 min gives ample slack for transient misses before paging.
+    "FRESHNESS_MAX_AGE_SECONDS": 900,
+    // Alert if crm_proposals 'pending' count exceeds this ceiling (apply stalled
+    // / review backlog runaway).
+    "PENDING_PROPOSALS_CEILING": 200
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

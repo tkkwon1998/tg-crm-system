@@ -1,0 +1,23 @@
+# Local development secrets template (spec §8).
+# Copy to .dev.vars in each app dir that needs them (or repo root for shared wrangler dev).
+# .dev.vars is git-ignored. NEVER commit real values.
+# In production these are set per-Worker with: wrangler secret put <NAME>
+
+# --- ingest (Telegram / Telethon container) ---
+TG_API_ID=
+TG_API_HASH=
+# StringSession produced by a one-time local `python login.py`. Account-level credential.
+TG_SESSION=
+
+# --- extract / apply (Attio CRM) ---
+ATTIO_TOKEN=
+
+# --- extract (Anthropic / Claude) ---
+ANTHROPIC_API_KEY=
+
+# --- sync (Notion action database) ---
+NOTION_TOKEN=
+
+# --- watchdog (alerting) ---
+SLACK_WEBHOOK_URL=
+HEALTHCHECK_URL=

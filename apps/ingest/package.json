@@ -1,0 +1,22 @@
+{
+  "name": "@crm/ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Ingest app: cron Worker that invokes the Telethon container and writes Telegram messages to D1.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "tail": "wrangler tail --config wrangler.jsonc --format pretty"
+  },
+  "dependencies": {
+    "@crm/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "^0.0.16",
+    "@cloudflare/workers-types": "^4.20250603.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^4.20.0"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Python (ingest container local runs)
+__pycache__/
+*.pyc
+.venv/

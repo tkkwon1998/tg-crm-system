@@ -1,0 +1,47 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sync",
+  "account_id": "4efa81edb9dfe313cb1636ef5f9206f3",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Cron: project current CRM state into Notion. Notion's API is ~3 req/s and we
+  // write diffs only, so a few-minute cadence is plenty and stays well under
+  // rate limits. (ingest is "* * * * *", watchdog "*/5 * * * *"; sync runs on
+  // its own slower cron per the contract.)
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  // Shared D1 — binding name MUST be "DB", database_name "crm". database_id is
+  // filled in by `make bootstrap` (shared across every app's wrangler.jsonc).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm",
+      "database_id": "43a788cc-7c4d-4e76-a12f-7a858b8bd17b"
+    }
+  ],
+
+  // Non-secret config (spec §8): the Notion action database id and tunables.
+  // NOTION_TOKEN is a secret set via `wrangler secret put NOTION_TOKEN`.
+  "vars": {
+    // The Notion database (data source) id that backs the action DB. Set this to
+    // your real database id after creating it; can be overridden per-environment.
+    "NOTION_DATABASE_ID": "REPLACE_WITH_NOTION_DATABASE_ID",
+    // Notion API version pin.
+    "NOTION_VERSION": "2022-06-28",
+    // A contact counts as "active" if it has activity within this many days.
+    "ACTIVE_WINDOW_DAYS": "30",
+    // Soft cap on how many active contacts to project per run (keeps each cron
+    // invocation comfortably within Notion's rate budget).
+    "MAX_CONTACTS_PER_RUN": "100",
+    // Throttle: minimum milliseconds between Notion API requests (~3 req/s => 350ms).
+    "NOTION_MIN_REQUEST_INTERVAL_MS": "350"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

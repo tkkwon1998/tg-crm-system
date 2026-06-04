@@ -1,0 +1,20 @@
+{
+  "name": "@crm/sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "sync Worker — projects current CRM state into the Notion action database (one row per active contact, diffs only). Spec §5.3.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "deploy": "wrangler deploy --config wrangler.jsonc"
+  },
+  "dependencies": {
+    "@crm/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250603.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^4.20.0"
+  }
+}

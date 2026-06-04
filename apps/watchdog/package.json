@@ -1,0 +1,21 @@
+{
+  "name": "@crm/watchdog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Watchdog Worker — freshness + queue-depth checks; Slack alert + dead-man's-switch healthcheck ping (spec §5.5).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail --format pretty"
+  },
+  "dependencies": {
+    "@crm/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250603.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^4.20.0"
+  }
+}

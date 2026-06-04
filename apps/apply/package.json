@@ -1,0 +1,21 @@
+{
+  "name": "@crm/apply",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "apply Worker — write approved / auto-apply-eligible crm_proposals to Attio (assert_person + provenance note), then mark them applied (spec §5.4, §7 guardrails).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail apply --format pretty"
+  },
+  "dependencies": {
+    "@crm/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250603.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^4.20.0"
+  }
+}
