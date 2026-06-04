@@ -27,16 +27,14 @@
   // Non-secret config (spec §8): the Notion action database id and tunables.
   // NOTION_TOKEN is a secret set via `wrangler secret put NOTION_TOKEN`.
   "vars": {
-    // The Notion database (data source) id that backs the action DB. Set this to
-    // your real database id after creating it; can be overridden per-environment.
-    "NOTION_DATABASE_ID": "REPLACE_WITH_NOTION_DATABASE_ID",
+    // The "Telegram Deal Chats" Notion database id (under Sales Hub). The
+    // NOTION_TOKEN integration MUST be granted access to this database/page.
+    "NOTION_DATABASE_ID": "be484d1281954fb7ab12d79815197739",
     // Notion API version pin.
     "NOTION_VERSION": "2022-06-28",
-    // A contact counts as "active" if it has activity within this many days.
-    "ACTIVE_WINDOW_DAYS": "30",
-    // Soft cap on how many active contacts to project per run (keeps each cron
+    // Soft cap on how many deal rows to project per run (keeps each cron
     // invocation comfortably within Notion's rate budget).
-    "MAX_CONTACTS_PER_RUN": "100",
+    "MAX_DEALS_PER_RUN": "200",
     // Throttle: minimum milliseconds between Notion API requests (~3 req/s => 350ms).
     "NOTION_MIN_REQUEST_INTERVAL_MS": "350"
   },

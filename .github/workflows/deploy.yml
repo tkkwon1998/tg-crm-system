@@ -63,8 +63,5 @@ jobs:
       - name: Deploy watchdog
         run: pnpm exec wrangler deploy --config apps/watchdog/wrangler.jsonc
 
-      # sync is intentionally NOT deployed yet — it needs the Notion action
-      # database id (apps/sync/wrangler.jsonc NOTION_DATABASE_ID). Once that
-      # exists, add:
-      #   - name: Deploy sync
-      #     run: pnpm exec wrangler deploy --config apps/sync/wrangler.jsonc
+      - name: Deploy sync
+        run: pnpm exec wrangler deploy --config apps/sync/wrangler.jsonc

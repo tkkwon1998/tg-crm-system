@@ -31,6 +31,8 @@ help:
 	@echo "  deploy APP=<name>    deploy a single app"
 	@echo "  backfill DAYS=<n>    one-shot history load (scripts/backfill.ts)"
 	@echo "  status               D1 dashboard (scripts/status.sh)"
+	@echo "  deals                list chat -> deal mappings (confirmed/candidate/unmatched)"
+	@echo "  link-deal CHAT=.. DEAL=..   confirm a group chat -> Attio deal link"
 	@echo "  tail APP=<name>      stream a Worker's logs"
 
 .PHONY: bootstrap
@@ -88,6 +90,22 @@ backfill:
 .PHONY: status
 status:
 	bash scripts/status.sh
+
+# Review the chat -> deal mappings (confirmed / candidate / unmatched).
+.PHONY: deals
+deals:
+	pnpm exec wrangler d1 execute $(DB_NAME) --remote --config packages/db/wrangler.jsonc \
+	  --command "SELECT chat_id, status, round(confidence,2) AS conf, substr(chat_title,1,32) AS chat, attio_deal_id AS deal FROM deal_map ORDER BY CASE status WHEN 'candidate' THEN 0 WHEN 'unmatched' THEN 1 ELSE 2 END, updated_at DESC;"
+
+# Confirm a group chat -> Attio deal link (hybrid model). Then sync reflects it.
+#   make link-deal CHAT=-5214111798 DEAL=rec_abc123
+.PHONY: link-deal
+link-deal:
+	@if [ -z "$(strip $(CHAT))" ] || [ -z "$(strip $(DEAL))" ]; then \
+	  echo "Usage: make link-deal CHAT=<telegram_chat_id> DEAL=<attio_deal_id>"; exit 1; fi
+	pnpm exec wrangler d1 execute $(DB_NAME) --remote --config packages/db/wrangler.jsonc \
+	  --command "INSERT INTO deal_map (chat_id, attio_deal_id, status, confidence, match_method, updated_at) VALUES ($(CHAT), '$(DEAL)', 'confirmed', 1, 'manual', unixepoch()) ON CONFLICT(chat_id) DO UPDATE SET attio_deal_id=excluded.attio_deal_id, status='confirmed', confidence=1, match_method='manual', updated_at=excluded.updated_at;"
+	@echo ">> Linked chat $(CHAT) -> deal $(DEAL) (confirmed). sync will reflect it on its next run."
 
 .PHONY: tail
 tail:

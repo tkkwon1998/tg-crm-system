@@ -332,6 +332,30 @@ export async function getConfirmedDeals(db: D1Database): Promise<DealMatch[]> {
   return res.results ?? [];
 }
 
+/** Every deal mapping (the full review universe; newest activity first). */
+export async function listAllDeals(db: D1Database): Promise<DealMatch[]> {
+  const res = await db
+    .prepare(`SELECT * FROM deal_map ORDER BY updated_at DESC`)
+    .all<DealMatch>();
+  return res.results ?? [];
+}
+
+/** Human confirmation of a chat -> deal link (used by `make link-deal`). */
+export async function confirmDeal(
+  db: D1Database,
+  chatId: number,
+  attioDealId: string,
+  matchMethod = 'manual'
+): Promise<void> {
+  await upsertDealMap(db, {
+    chat_id: chatId,
+    attio_deal_id: attioDealId,
+    status: 'confirmed',
+    confidence: 1,
+    match_method: matchMethod,
+  });
+}
+
 /** Deal mappings filtered by status (e.g. 'candidate'/'unmatched' for review). */
 export async function listDealsByStatus(db: D1Database, status: DealStatus): Promise<DealMatch[]> {
   const res = await db
@@ -436,6 +460,17 @@ export async function listByStatus(
       `SELECT * FROM crm_proposals WHERE status = ?1 ORDER BY created_at ASC LIMIT ?2`
     )
     .bind(status, limit)
+    .all<Proposal>();
+  return res.results ?? [];
+}
+
+/** Deal proposals (those tied to a group chat), newest first. */
+export async function getDealProposals(db: D1Database, limit = 500): Promise<Proposal[]> {
+  const res = await db
+    .prepare(
+      `SELECT * FROM crm_proposals WHERE telegram_chat_id IS NOT NULL ORDER BY created_at DESC LIMIT ?1`
+    )
+    .bind(limit)
     .all<Proposal>();
   return res.results ?? [];
 }
