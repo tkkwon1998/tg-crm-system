@@ -33,9 +33,12 @@ import {
  */
 export class IngestContainer extends Container<Env> {
   defaultPort = 8080;
-  // Telegram connect + catch-up is seconds in steady state; give it headroom
-  // but keep it well under the proxy timeout. The container exits on idle.
-  sleepAfter = '2m';
+  // Keep the instance SHORTER-lived than the 60s cron interval so it idles out
+  // and recycles between runs. This (a) matches the spec's ephemeral
+  // "connect → fetch → exit" model / scale-to-zero billing, and (b) guarantees
+  // each run boots the latest deployed image — a warm instance (sleepAfter >
+  // cron interval) would keep serving a stale image forever after a deploy.
+  sleepAfter = '20s';
 
   // Forward the account credentials from Worker secrets into the container env.
   // envVars is read at container start; the Worker sets these before invoking.
