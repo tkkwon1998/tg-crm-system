@@ -209,7 +209,13 @@ async function runIngest(env: Env): Promise<RunResult> {
     cursors_advanced: advanced,
     container_errors: result.errors?.length ?? 0,
   };
-  console.log(`ingest: ${JSON.stringify(summary)}`);
+  // Diagnostic: how many resume cursors did we SEND to the container this run,
+  // and the min_id range. If cursors_sent>0 but we still pull the same messages,
+  // the re-fetch bug is container-side (min_id handling), not worker-side.
+  console.log(
+    `ingest: ${JSON.stringify(summary)} cursors_sent=${reqBody.cursors.length} ` +
+      `sent=${JSON.stringify(reqBody.cursors.map((c) => ({ id: c.chat_id, min: c.min_id })))}`
+  );
   return summary;
 }
 
