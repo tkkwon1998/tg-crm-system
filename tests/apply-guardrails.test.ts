@@ -5,6 +5,7 @@ import {
   parseAllowlist,
   parseProposedChanges,
   parseSourceMessageIds,
+  partitionDealChanges,
   type ApplyConfig,
 } from '../apps/apply/src/guardrails.js';
 
@@ -62,7 +63,7 @@ describe('decide — people auto-apply gate', () => {
   });
 });
 
-describe('decide — deal proposals', () => {
+describe('decide — deal proposals (note-centric)', () => {
   const deal = (over: Partial<Proposal> = {}) =>
     proposal({
       attio_object: 'deals',
@@ -72,26 +73,34 @@ describe('decide — deal proposals', () => {
       ...over,
     });
 
-  it('auto-applies a confirmed deal with no field changes (note + participants are the payload)', () => {
+  it('applies any CONFIRMED deal — the note is the deliverable (even at low confidence)', () => {
     expect(decide(deal(), cfg).kind).toBe('apply');
+    expect(decide(deal({ confidence: 0.2 }), cfg).kind).toBe('apply');
+    expect(decide(deal({ proposed_changes: JSON.stringify({ stage: 'won', next_step: 'x' }) }), cfg).kind).toBe('apply');
   });
-  it('auto-applies a confirmed deal with allowlisted (non-stage) fields', () => {
-    expect(decide(deal({ proposed_changes: JSON.stringify({ next_step: 'demo Tue' }) }), cfg).kind).toBe('apply');
-  });
-  it('routes stage / commercial fields to review (default-deny)', () => {
-    for (const slug of ['stage', 'amount', 'close_date']) {
-      expect(decide(deal({ proposed_changes: JSON.stringify({ [slug]: 'x' }) }), cfg).kind).toBe('skip');
-    }
-  });
-  it('skips a confirmed deal below the confidence threshold', () => {
-    expect(decide(deal({ confidence: 0.4 }), cfg).kind).toBe('skip');
-  });
-  it('does NOT write an unconfirmed deal (null target) — skip pending, block approved', () => {
+  it('does NOT write an UNCONFIRMED deal (null target) — skip pending, block approved', () => {
     expect(decide(deal({ attio_record_id: null }), cfg).kind).toBe('skip');
     expect(decide(deal({ attio_record_id: null, status: 'approved' }), cfg).kind).toBe('block');
   });
-  it('applies a human-approved deal regardless of confidence', () => {
+  it('applies a human-approved deal', () => {
     expect(decide(deal({ status: 'approved', confidence: 0.2 }), cfg).kind).toBe('apply');
+  });
+});
+
+describe('partitionDealChanges — what auto-writes vs. surfaces for review', () => {
+  const allow = new Set(['next_step', 'last_touch_date']);
+  it('splits allowlisted (write) from stage/commercial (review)', () => {
+    const { write, review } = partitionDealChanges(
+      { next_step: 'call Tue', last_touch_date: '2026-06-04', stage: 'won', amount: 100 },
+      allow
+    );
+    expect(write).toEqual({ next_step: 'call Tue', last_touch_date: '2026-06-04' });
+    expect(review).toEqual({ stage: 'won', amount: 100 });
+  });
+  it('an empty allowlist routes ALL fields to review (note-only workspace)', () => {
+    const { write, review } = partitionDealChanges({ next_step: 'x', stage: 'won' }, new Set());
+    expect(write).toEqual({});
+    expect(review).toEqual({ next_step: 'x', stage: 'won' });
   });
 });
 

@@ -98,7 +98,14 @@ export function decide(p: Proposal, cfg: ApplyConfig): Decision {
       : { kind: 'skip', reason: 'no confirmed target — confirm the chat->deal match first' };
   }
 
-  if (p.attio_object === 'deals') return decideDeal(p, changes, cfg, humanApproved);
+  if (p.attio_object === 'deals') {
+    // A confirmed deal (live record id ensured above) always applies: the
+    // provenance note + participant links are additive/safe, and applyDeal
+    // FILTERS field writes to the safe allowlist — non-allowlisted/stage
+    // suggestions are surfaced in the note for human review, never auto-written.
+    // Confirming the chat->deal match is itself the human gate.
+    return { kind: 'apply', reason: humanApproved ? 'human-approved deal' : 'confirmed deal' };
+  }
   if (p.attio_object === 'people') return decidePeople(p, changes, cfg, humanApproved);
 
   // Any other object (e.g. companies) is never auto-applied.
@@ -107,33 +114,22 @@ export function decide(p: Proposal, cfg: ApplyConfig): Decision {
     : { kind: 'skip', reason: `object '${p.attio_object}' requires explicit human approval` };
 }
 
-/** Decision logic for DEAL proposals (default-deny non-stage allowlist). */
-function decideDeal(
-  p: Proposal,
+/**
+ * Split a deal proposal's changes into auto-writable (allowlisted, non-stage)
+ * vs review-only (everything else — stage/commercial/unknown). The review set is
+ * surfaced in the provenance note, not written to Attio.
+ */
+export function partitionDealChanges(
   changes: Record<string, unknown>,
-  cfg: ApplyConfig,
-  humanApproved: boolean
-): Decision {
-  // A human reviewed it: apply whatever they approved + note + participants.
-  // Empty changes is fine for deals — the provenance note + participant links
-  // are themselves valuable, additive writes.
-  if (humanApproved) return { kind: 'apply', reason: 'human-approved deal' };
-
-  // Auto path: confidence gate, then default-deny on the safe deal allowlist.
-  if (p.confidence < cfg.autoApplyConfidenceThreshold) {
-    return { kind: 'skip', reason: `confidence ${p.confidence} < threshold ${cfg.autoApplyConfidenceThreshold}` };
+  allowlist: Set<string>
+): { write: Record<string, unknown>; review: Record<string, unknown> } {
+  const write: Record<string, unknown> = {};
+  const review: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(changes)) {
+    if (allowlist.has(k.trim().toLowerCase())) write[k] = v;
+    else review[k] = v;
   }
-  const unsafe = Object.keys(changes).filter(
-    (s) => !cfg.dealSafeAttributeAllowlist.has(s.trim().toLowerCase())
-  );
-  if (unsafe.length > 0) {
-    return {
-      kind: 'skip',
-      reason: `non-allowlisted deal field(s) [${unsafe.join(', ')}] (stage/commercial) — route to review`,
-    };
-  }
-  // Confirmed deal + confident + only allowlisted (or no) field changes.
-  return { kind: 'apply', reason: `auto-apply deal: confidence ${p.confidence} >= ${cfg.autoApplyConfidenceThreshold}, fields allowlisted/none` };
+  return { write, review };
 }
 
 /** Decision logic for PEOPLE proposals (unchanged contract). */

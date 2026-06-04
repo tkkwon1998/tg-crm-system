@@ -34,10 +34,12 @@
     "AUTO_APPLY_CONFIDENCE_THRESHOLD": "0.9",
     // Comma-separated safe attribute slugs eligible for auto-apply (PEOPLE).
     "SAFE_ATTRIBUTE_ALLOWLIST": "phone,phone_numbers,email,email_addresses,job_title,title",
-    // Safe NON-STAGE deal attribute slugs eligible for auto-apply (DEALS). Your
-    // deal schema is mostly stage/commercial (review-only); leave this tight.
-    // Anything not listed (stage, value, close_date, owner, ...) routes to review.
-    "DEAL_SAFE_ATTRIBUTE_ALLOWLIST": "next_step,next_steps,next_step_date,last_touch,last_touch_date,last_contacted",
+    // Safe NON-STAGE deal attribute slugs eligible for auto field-writes (DEALS).
+    // EMPTY for this workspace: the Deals object exposes no safe additive text
+    // field (only stage/value/close-date/task-date/rating), so we attach the
+    // provenance NOTE only and surface field suggestions in it for review. Add
+    // real attribute slugs here later to enable auto field-writes.
+    "DEAL_SAFE_ATTRIBUTE_ALLOWLIST": "",
     // Attribute slug used to dedupe (matching_attribute) on assert_person.
     "ATTIO_PEOPLE_MATCHING_ATTRIBUTE": "email_addresses",
     // The Deals attribute holding associated people (record reference). Attio's

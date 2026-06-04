@@ -33,6 +33,7 @@ import {
   parseAllowlist,
   parseProposedChanges,
   parseSourceMessageIds,
+  partitionDealChanges,
   type ApplyConfig,
 } from './guardrails.js';
 
@@ -111,11 +112,13 @@ function buildPersonNote(p: Proposal, changes: Record<string, unknown>, sources:
 
 function buildDealNote(
   p: Proposal,
-  changes: Record<string, unknown>,
+  written: Record<string, unknown>,
+  review: Record<string, unknown>,
   sources: string[],
   participants: ProposalParticipant[]
 ): string {
-  const changeLines = Object.entries(changes).map(([s, v]) => `- \`${s}\`: ${JSON.stringify(v)}`).join('\n');
+  const fmt = (o: Record<string, unknown>) =>
+    Object.entries(o).map(([s, v]) => `- \`${s}\`: ${JSON.stringify(v)}`).join('\n');
   const partLines = participants
     .map((pt) => `- ${pt.name ?? `tg:${pt.telegram_user_id}`}${pt.attio_person_id ? ` (linked)` : ''}${pt.role ? ` — ${pt.role}` : ''}`)
     .join('\n');
@@ -127,9 +130,11 @@ function buildDealNote(
     `### Suggested action\n\`${p.suggested_action}\``,
     '',
     p.rationale ? `### Summary\n${p.rationale}\n` : '',
-    '### Field updates',
-    changeLines || '_(none — note + participants only)_',
+    '### Fields written to this deal',
+    fmt(written) || '_(none — provenance note only)_',
     '',
+    Object.keys(review).length ? '### Suggested (needs human review — not written)' : '',
+    Object.keys(review).length ? fmt(review) : '',
     '### Participants',
     partLines || '_(none resolved)_',
     '',
@@ -193,38 +198,66 @@ async function associatePeople(
   });
 }
 
-async function applyDeal(db: D1Database, attio: AttioClient, env: Env, p: Proposal): Promise<boolean> {
+async function applyDeal(
+  db: D1Database,
+  attio: AttioClient,
+  env: Env,
+  cfg: ApplyConfig,
+  p: Proposal
+): Promise<boolean> {
   const changes = parseProposedChanges(p);
   const sources = parseSourceMessageIds(p);
   const participants = parseParticipants(p);
   const dealId = p.attio_record_id!; // effective confirmed deal id (resolved in run())
   const peopleAttr = env.ATTIO_DEAL_PEOPLE_ATTRIBUTE ?? 'associated_people';
+  // For a human-approved deal, write everything; otherwise only allowlisted fields.
+  const { write, review } =
+    p.status === 'approved'
+      ? { write: changes, review: {} as Record<string, unknown> }
+      : partitionDealChanges(changes, cfg.dealSafeAttributeAllowlist);
 
   try {
-    // 1. allowlisted/approved field updates (often none — schema may have no safe fields).
-    if (Object.keys(changes).length > 0) {
-      await attio.patchRecord('deals', dealId, changes);
-    }
-    // 2. associate confirmed participants (people with a resolved Attio id).
-    const newPersonIds = participants
-      .map((pt) => pt.attio_person_id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    if (newPersonIds.length > 0) {
-      await associatePeople(attio, dealId, peopleAttr, newPersonIds);
-    }
-    // 3. provenance note (always — the traceable record of this enrichment).
+    // 1. CRITICAL: provenance note first — it is the deliverable + traceability,
+    //    and must land even if a field write or association later fails.
     await attio.createNote({
       parentObject: 'deals',
       parentRecordId: dealId,
       title: `Telegram deal enrichment — proposal #${p.id}`,
-      content: buildDealNote(p, changes, sources, participants),
+      content: buildDealNote(p, write, review, sources, participants),
     });
-    await markStatus(db, p.id, 'applied', null);
-    return true;
   } catch (e) {
     await markStatus(db, p.id, p.status, errMsg(e));
     return false;
   }
+
+  // 2. BEST-EFFORT: write allowlisted fields. A failure (e.g. unknown slug) is
+  //    logged and recorded as a soft note, but does NOT fail the proposal.
+  let softError: string | null = null;
+  if (Object.keys(write).length > 0) {
+    try {
+      await attio.patchRecord('deals', dealId, write);
+    } catch (e) {
+      softError = `field write skipped: ${errMsg(e)}`;
+      console.warn(`proposal #${p.id}: ${softError}`);
+    }
+  }
+
+  // 3. BEST-EFFORT: associate confirmed participants (people with a resolved id).
+  const newPersonIds = participants
+    .map((pt) => pt.attio_person_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  if (newPersonIds.length > 0) {
+    try {
+      await associatePeople(attio, dealId, peopleAttr, newPersonIds);
+    } catch (e) {
+      const m = `participant link skipped: ${errMsg(e)}`;
+      softError = softError ? `${softError}; ${m}` : m;
+      console.warn(`proposal #${p.id}: ${m}`);
+    }
+  }
+
+  await markStatus(db, p.id, 'applied', softError);
+  return true;
 }
 
 function errMsg(e: unknown): string {
@@ -285,7 +318,7 @@ export async function run(env: Env): Promise<RunResult> {
       case 'apply': {
         const ok =
           p.attio_object === 'deals'
-            ? await applyDeal(env.DB, attio, env, p)
+            ? await applyDeal(env.DB, attio, env, cfg, p)
             : await applyPerson(env.DB, attio, matchingAttribute, p);
         if (ok) {
           result.applied++;
