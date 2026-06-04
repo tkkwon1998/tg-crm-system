@@ -35,7 +35,14 @@
       "name": "crm-extract-pipeline",
       "class_name": "ExtractWorkflow"
     }
-  ]
+  ],
+
+  "vars": {
+    // Fuzzy chat-title -> deal score at/above which a CLEAR winner auto-confirms
+    // (must still beat the runner-up by the disambiguation margin). Lowered to
+    // 0.78 so "X <> Theo" style titles (e.g. RockawayX/Fasanara ~0.80) auto-link.
+    "DEAL_AUTO_CONFIRM_SCORE": "0.78"
+  }
 
   // Secrets (set with `wrangler secret put <NAME>` from this dir, or via
   // .dev.vars locally): ANTHROPIC_API_KEY, ATTIO_TOKEN.
