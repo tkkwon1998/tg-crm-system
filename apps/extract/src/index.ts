@@ -19,7 +19,7 @@
 
 import { getUnextractedMessages, type Message } from '@crm/db';
 import type { Env, ThreadMessage, ThreadWorkflowParams } from './env.js';
-import { attioDealsDiag, resolveDeal } from './deals.js';
+import { attioAttrsDiag, attioDealsDiag, resolveDeal } from './deals.js';
 
 export { ExtractWorkflow } from './workflow.js';
 
@@ -119,6 +119,10 @@ export default {
     // Diagnostic: positively confirm the Attio deals read (status + names).
     if (req.method === 'GET' && url.pathname === '/diag/deals') {
       return Response.json(await attioDealsDiag(env));
+    }
+    // Inspect the Deals object's attributes (slug/type/writable) to map fields.
+    if (req.method === 'GET' && url.pathname === '/diag/attrs') {
+      return Response.json(await attioAttrsDiag(env, url.searchParams.get('object') ?? 'deals'));
     }
     // Force a fresh chat->deal resolution (bypasses the once-per-thread Workflow
     // idempotency). Re-matches a chat whose deal_map row is stale/unmatched.

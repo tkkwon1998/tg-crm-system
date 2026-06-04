@@ -138,6 +138,26 @@ export interface AttioDealsDiag {
   error: string | null;
 }
 
+/** Diagnostic: list an object's attributes (slug + type + writability). */
+export async function attioAttrsDiag(env: Env, object = 'deals'): Promise<unknown> {
+  const res = await fetch(`${attioBase(env)}/v2/objects/${object}/attributes`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${env.ATTIO_TOKEN}` },
+  });
+  if (!res.ok) {
+    return { ok: false, status: res.status, error: (await res.text().catch(() => '')).slice(0, 400) };
+  }
+  const data = (await res.json()) as { data?: Array<Record<string, unknown>> };
+  const attrs = (data.data ?? []).map((a) => ({
+    slug: a.api_slug,
+    title: a.title,
+    type: a.type,
+    writable: a.is_writable,
+    system: a.is_system,
+  }));
+  return { ok: true, status: 200, count: attrs.length, attrs };
+}
+
 /**
  * Diagnostic: live Attio deals query that does NOT swallow errors, so we can
  * positively confirm reads work (and see deal names) vs. a silent failure.
