@@ -6,9 +6,12 @@
   "compatibility_date": "2025-05-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Cron: catch-up every minute (spec §5.1). Latency bounded by the 1-min floor.
+  // Cron: catch-up every 10 min (tuned for sparse volume — a few msgs/hours).
+  // Latency is bounded by this interval; the spec tolerates minutes. Each run
+  // cold-starts the container, so a slower cadence cuts container cost ~10x vs
+  // every-minute. Bump back toward "*/1" only if volume/latency needs demand it.
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["*/10 * * * *"]
   },
 
   // Shared D1 database. Binding name MUST be "DB" (contract). database_id is

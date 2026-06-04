@@ -12,8 +12,10 @@
   // Cron-driven (spec §5.4). Runs a few minutes behind ingest/extract; CRM
   // enrichment tolerates minutes of latency. Idempotent on proposal status,
   // so overlapping/retried runs are safe.
+  // Offset ~6 min after ingest's */10 so a freshly-extracted proposal applies in
+  // the same cycle. Idempotent on proposal status, so overlaps/retries are safe.
   "triggers": {
-    "crons": ["*/2 * * * *"]
+    "crons": ["6,16,26,36,46,56 * * * *"]
   },
 
   // Shared D1 — binding name MUST be "DB", database_name "crm". The

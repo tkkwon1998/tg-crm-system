@@ -9,12 +9,12 @@
     "enabled": true
   },
 
-  // Cron: pick up un-extracted message threads and fan out one Workflow per
-  // thread. Decoupled from ingest's 1-min cron; a few minutes of latency is
-  // acceptable (spec §1 non-goals). Overlaps are safe — getUnextractedMessages
-  // + markMessagesExtracted are idempotent.
+  // Cron: pick up un-extracted threads, fan out one Workflow per thread. Offset
+  // ~3 min after ingest's */10 so it processes the same cycle's new messages.
+  // A few minutes of latency is acceptable (spec §1). Overlaps are safe —
+  // getUnextractedMessages + markMessagesExtracted are idempotent.
   "triggers": {
-    "crons": ["*/2 * * * *"]
+    "crons": ["3,13,23,33,43,53 * * * *"]
   },
 
   // Shared D1 database. Binding name MUST be "DB" (contract). database_id is

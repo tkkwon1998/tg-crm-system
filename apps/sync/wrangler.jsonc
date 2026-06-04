@@ -11,7 +11,7 @@
   // rate limits. (ingest is "* * * * *", watchdog "*/5 * * * *"; sync runs on
   // its own slower cron per the contract.)
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["*/30 * * * *"]
   },
 
   // Shared D1 — binding name MUST be "DB", database_name "crm". database_id is
