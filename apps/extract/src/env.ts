@@ -28,6 +28,8 @@ export interface Env {
   EXTRACT_BATCH_LIMIT?: string;
   /** Deal-centric flow: fuzzy chat-title->deal score at/above which to auto-confirm. */
   DEAL_AUTO_CONFIRM_SCORE?: string;
+  /** Min margin the top deal must beat the runner-up by to auto-confirm (anti-collision). */
+  DEAL_DISAMBIGUATION_MARGIN?: string;
 }
 
 /** One message as carried into the Workflow payload (a trimmed Message). */

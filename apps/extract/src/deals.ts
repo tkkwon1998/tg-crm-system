@@ -18,10 +18,34 @@ import { getDealMap, upsertDealMap, type DealCandidate, type DealMatch } from '@
 import type { Env } from './env.js';
 
 const DEFAULT_ATTIO_BASE = 'https://api.attio.com';
-/** Fuzzy score (0-1) at/above which a title match is auto-confirmed. */
+/** Fuzzy score (0-1) at/above which a title match is eligible to auto-confirm. */
 const DEFAULT_AUTO_CONFIRM_SCORE = 0.82;
 /** Minimum score to surface as a review candidate at all. */
 const MIN_CANDIDATE_SCORE = 0.4;
+/**
+ * The top match must beat the runner-up by at least this margin to auto-confirm.
+ * Guards against same-company collisions (e.g. a "Binance" chat matching both
+ * "Binance Wallet" and "Binance Earn" at near-identical scores) — ambiguous
+ * matches become human-review candidates instead of a wrong auto-attribution.
+ */
+const DEFAULT_DISAMBIGUATION_MARGIN = 0.15;
+
+/**
+ * Decide whether the top fuzzy match is safe to auto-confirm (hybrid policy):
+ * it must clear the absolute score bar AND clearly beat the runner-up.
+ * Pure + exported for testing.
+ */
+export function isClearWinner(
+  scores: number[],
+  autoConfirmScore: number,
+  margin: number
+): boolean {
+  if (scores.length === 0) return false;
+  const sorted = [...scores].sort((a, b) => b - a);
+  const top = sorted[0]!;
+  const second = sorted[1] ?? 0;
+  return top >= autoConfirmScore && top - second >= margin;
+}
 
 export interface ResolvedDeal {
   chat_id: number;
@@ -233,7 +257,14 @@ export async function resolveDeal(
   }));
 
   const top = scored[0]!;
-  const autoConfirm = top.score >= autoConfirmScore;
+  const margin = parseScore(env.DEAL_DISAMBIGUATION_MARGIN, DEFAULT_DISAMBIGUATION_MARGIN);
+  // Hybrid policy: auto-confirm only a clear winner; otherwise leave as a
+  // candidate for human confirmation in Notion (then remembered).
+  const autoConfirm = isClearWinner(
+    scored.map((s) => s.score),
+    autoConfirmScore,
+    margin
+  );
   const status = autoConfirm ? 'confirmed' : 'candidate';
 
   await upsertDealMap(db, {
