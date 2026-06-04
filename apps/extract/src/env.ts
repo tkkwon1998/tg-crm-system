@@ -26,6 +26,8 @@ export interface Env {
   AUTO_APPLY_THRESHOLD?: string;
   PHONE_AUTO_CONFIRM?: string;
   EXTRACT_BATCH_LIMIT?: string;
+  /** Deal-centric flow: fuzzy chat-title->deal score at/above which to auto-confirm. */
+  DEAL_AUTO_CONFIRM_SCORE?: string;
 }
 
 /** One message as carried into the Workflow payload (a trimmed Message). */
@@ -40,13 +42,12 @@ export interface ThreadMessage {
 }
 
 /**
- * Params handed to one Workflow instance: a single chat thread's worth of
- * un-extracted messages. Must be JSON-serializable (Workflow payload).
+ * Params handed to one Workflow instance: a single GROUP chat thread's worth of
+ * un-extracted messages. Deal-centric: the whole chat maps to one Attio deal,
+ * and the distinct senders become participants. Must be JSON-serializable.
  */
 export interface ThreadWorkflowParams {
   chat_id: number;
   chat_title: string | null;
-  /** The telegram user we attribute this thread to (the non-owner sender). */
-  counterparty_user_id: number | null;
   messages: ThreadMessage[];
 }

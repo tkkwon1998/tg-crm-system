@@ -9,6 +9,9 @@
 
 import type {
   ChatCursor,
+  DealInput,
+  DealMatch,
+  DealStatus,
   IdentityInput,
   IdentityMatch,
   IdentityStatus,
@@ -277,6 +280,74 @@ export async function confirmIdentity(
 }
 
 // ===========================================================================
+// deal_map
+// ===========================================================================
+
+/** One deal mapping by chat_id, or null if the chat has never been resolved. */
+export async function getDealMap(db: D1Database, chatId: number): Promise<DealMatch | null> {
+  return await db
+    .prepare(`SELECT * FROM deal_map WHERE chat_id = ?1`)
+    .bind(chatId)
+    .first<DealMatch>();
+}
+
+/** All confirmed chat -> deal mappings (the trusted set). */
+export async function getConfirmedDeals(db: D1Database): Promise<DealMatch[]> {
+  const res = await db
+    .prepare(`SELECT * FROM deal_map WHERE status = 'confirmed'`)
+    .all<DealMatch>();
+  return res.results ?? [];
+}
+
+/** Deal mappings filtered by status (e.g. 'candidate'/'unmatched' for review). */
+export async function listDealsByStatus(db: D1Database, status: DealStatus): Promise<DealMatch[]> {
+  const res = await db
+    .prepare(`SELECT * FROM deal_map WHERE status = ?1 ORDER BY updated_at DESC`)
+    .bind(status)
+    .all<DealMatch>();
+  return res.results ?? [];
+}
+
+/**
+ * Upsert a deal mapping keyed on chat_id. A `confirmed` row is never overwritten
+ * by a non-manual re-match: only an incoming 'confirmed'/'rejected' (explicit
+ * human decision) may change a confirmed mapping. Mirrors upsertIdentity.
+ */
+export async function upsertDealMap(db: D1Database, input: DealInput): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO deal_map
+         (chat_id, attio_deal_id, status, confidence, match_method, candidates_json, chat_title, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+       ON CONFLICT (chat_id) DO UPDATE SET
+         attio_deal_id = CASE
+             WHEN deal_map.status = 'confirmed' AND excluded.status NOT IN ('confirmed','rejected')
+               THEN deal_map.attio_deal_id ELSE excluded.attio_deal_id END,
+         status = CASE
+             WHEN deal_map.status = 'confirmed' AND excluded.status NOT IN ('confirmed','rejected')
+               THEN deal_map.status ELSE excluded.status END,
+         confidence = CASE
+             WHEN deal_map.status = 'confirmed' AND excluded.status NOT IN ('confirmed','rejected')
+               THEN deal_map.confidence ELSE excluded.confidence END,
+         match_method    = COALESCE(excluded.match_method, deal_map.match_method),
+         candidates_json = COALESCE(excluded.candidates_json, deal_map.candidates_json),
+         chat_title      = COALESCE(excluded.chat_title, deal_map.chat_title),
+         updated_at      = excluded.updated_at`
+    )
+    .bind(
+      input.chat_id,
+      input.attio_deal_id ?? null,
+      input.status,
+      input.confidence ?? 0,
+      input.match_method ?? null,
+      input.candidates_json == null ? null : toJsonText(input.candidates_json),
+      input.chat_title ?? null,
+      now()
+    )
+    .run();
+}
+
+// ===========================================================================
 // crm_proposals
 // ===========================================================================
 
@@ -286,16 +357,19 @@ export async function insertProposal(db: D1Database, input: ProposalInput): Prom
   const res = await db
     .prepare(
       `INSERT INTO crm_proposals
-         (telegram_user_id, attio_object, attio_record_id, proposed_changes, suggested_action,
-          confidence, rationale, source_message_ids, status, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+         (telegram_user_id, telegram_chat_id, attio_object, attio_record_id, proposed_changes,
+          participants_json, suggested_action, confidence, rationale, source_message_ids,
+          status, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
        RETURNING id`
     )
     .bind(
       input.telegram_user_id ?? null,
+      input.telegram_chat_id ?? null,
       input.attio_object ?? 'people',
       input.attio_record_id ?? null,
       toJsonText(input.proposed_changes),
+      input.participants == null ? null : toJsonText(input.participants),
       input.suggested_action ?? 'none',
       input.confidence ?? 0,
       input.rationale ?? null,

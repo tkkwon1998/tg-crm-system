@@ -36,18 +36,6 @@ function toThreadMessage(m: Message): ThreadMessage {
   };
 }
 
-/**
- * The counterparty is the non-owner sender in the thread: the first incoming
- * (is_outgoing === 0) message's sender_user_id. Null if the thread is entirely
- * outgoing or has no identified sender.
- */
-function pickCounterparty(messages: ThreadMessage[]): number | null {
-  for (const m of messages) {
-    if (m.is_outgoing === 0 && m.sender_user_id != null) return m.sender_user_id;
-  }
-  return null;
-}
-
 /** Stable, idempotent Workflow instance id for a thread's current message range. */
 function instanceId(params: ThreadWorkflowParams): string {
   const ids = params.messages.map((m) => m.message_id);
@@ -71,7 +59,6 @@ export function groupIntoThreads(messages: Message[]): ThreadWorkflowParams[] {
     threads.push({
       chat_id,
       chat_title: msgs[0]?.chat_title ?? null,
-      counterparty_user_id: pickCounterparty(msgs),
       messages: msgs,
     });
   }

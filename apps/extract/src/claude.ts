@@ -1,19 +1,19 @@
 /**
- * Claude extraction (spec §5.2, §7).
+ * Claude extraction — deal-centric (group chat -> Attio deal).
  *
- * Calls the Anthropic Messages API (https://api.anthropic.com/v1/messages) and
- * instructs the model to emit ONLY strict JSON matching the ClaudeExtraction
- * contract from @crm/db. We parse defensively — guardrails are enforced in code
- * (see workflow.ts), never trusted from the model output.
+ * Calls the Anthropic Messages API and instructs the model to read a GROUP
+ * thread (plus the matched deal snapshot + resolved participants) and emit ONLY
+ * strict JSON matching the ClaudeExtraction contract from @crm/db, targeting the
+ * DEAL. We parse defensively; guardrails are enforced in code (workflow.ts) —
+ * never trusted from the model.
  *
- * Model policy (contract note 4):
- *   default  claude-haiku-4-5-20251001  (cost at volume)
- *   escalate claude-sonnet-4-6          (long threads OR low first-pass confidence)
+ * Model policy: default claude-haiku-4-5-20251001; escalate to
+ * claude-sonnet-4-6 for long threads or low first-pass confidence.
  */
 
-import type { ClaudeExtraction, SuggestedAction } from '@crm/db';
+import type { ClaudeExtraction, ProposalParticipant, SuggestedAction } from '@crm/db';
 import type { Env, ThreadMessage } from './env.js';
-import type { ResolvedIdentity } from './identity.js';
+import type { ResolvedDeal } from './deals.js';
 
 const DEFAULT_ANTHROPIC_BASE = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -21,42 +21,40 @@ const ANTHROPIC_VERSION = '2023-06-01';
 export const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
 export const MODEL_SONNET = 'claude-sonnet-4-6';
 
-/** Threads with more than this many messages escalate to Sonnet up front. */
 const LONG_THREAD_MESSAGE_COUNT = 25;
-/** Total thread text longer than this (chars) escalates to Sonnet up front. */
 const LONG_THREAD_CHARS = 12_000;
-/** First-pass (Haiku) confidence at/below which we re-run on Sonnet. */
 const LOW_CONFIDENCE_THRESHOLD = 0.45;
 
 const SUGGESTED_ACTIONS: readonly SuggestedAction[] = ['bump', 'follow_up', 'none'];
 
-const SYSTEM_PROMPT = `You are a CRM data-extraction assistant for a B2B sales team. You read a thread of Telegram messages between a salesperson (the "owner") and a counterparty, plus a snapshot of the counterparty's current Attio CRM record, and you propose structured CRM updates.
+const SYSTEM_PROMPT = `You are a CRM deal-intelligence assistant for a B2B sales team. You read a thread of Telegram messages from a GROUP CHAT that represents a single sales deal/opportunity, plus a snapshot of the matched Attio DEAL record and the list of resolved participants. You propose structured updates to the DEAL.
 
-Output ONLY a single JSON object and nothing else — no prose, no markdown fences, no explanation. The JSON MUST match this exact shape:
+Output ONLY a single JSON object and nothing else — no prose, no markdown fences. The JSON MUST match this exact shape:
 
 {
-  "attio_object": "people",
-  "attio_record_id": "rec_... or null",
-  "proposed_changes": { "<attribute_slug>": <value> },
+  "attio_object": "deals",
+  "attio_record_id": "rec_... (the deal id provided) or null",
+  "proposed_changes": { "<deal_attribute_slug>": <value> },
   "suggested_action": "bump" | "follow_up" | "none",
   "confidence": 0.0,
-  "rationale": "one short line",
-  "source_message_ids": ["<chat_id>:<message_id>", ...]
+  "rationale": "one short line summarizing deal state",
+  "source_message_ids": ["<chat_id>:<message_id>", ...],
+  "participants": [ { "name": "as written in chat", "role": "champion|decision_maker|blocker|other" } ]
 }
 
 Rules:
-- attio_record_id: echo the provided record_id if (and only if) the snapshot clearly belongs to this counterparty; otherwise null. Never invent a record id.
-- proposed_changes: ONLY include attributes you have direct evidence for in the messages (e.g. a phone number, an email, a job title the person stated). Use the Attio attribute slug as the key. If you have no confident change, return an empty object {}.
-- Do NOT propose deal-stage changes or creating new records; those are out of scope for this extraction.
-- suggested_action: "bump" if the salesperson should re-engage a dormant/waiting thread, "follow_up" if there is an open commitment to act on, "none" otherwise.
-- confidence: your honest 0.0-1.0 confidence in the overall proposal.
-- source_message_ids: the "<chat_id>:<message_id>" of the messages that justify your proposal. Only include ids present in the input.
-- Never include attributes or values that are not supported by the message text.`;
+- attio_record_id: echo the provided deal record_id if a deal snapshot was given; otherwise null. Never invent an id.
+- proposed_changes: ONLY non-stage deal fields you have direct evidence for. Allowed examples: "next_step" (short text of the agreed next action), "next_step_date" (ISO date if explicitly stated), "last_touch_date" (ISO date of the latest message). Use the Attio deal attribute slug as the key. If nothing concrete, return {}.
+- NEVER propose deal-stage / pipeline / amount / close-date / owner changes — those require human review and are out of scope here. Do not put them in proposed_changes.
+- suggested_action: "bump" if the deal is dormant and the rep should re-engage; "follow_up" if there is an open commitment/next step; "none" otherwise.
+- confidence: your honest 0.0-1.0 confidence in the overall deal read.
+- source_message_ids: the "<chat_id>:<message_id>" ids justifying your read. Only ids present in the input.
+- participants: who is active in the thread and their likely role; names as they appear. Advisory only.
+- Never include values not supported by the message text.`;
 
 export interface ExtractionResult {
   extraction: ClaudeExtraction;
   model: string;
-  /** Whether a Sonnet escalation pass was performed. */
   escalated: boolean;
 }
 
@@ -67,7 +65,7 @@ export interface ExtractionResult {
 function renderThread(messages: ThreadMessage[]): string {
   return messages
     .map((m) => {
-      const who = m.is_outgoing === 1 ? 'OWNER' : 'COUNTERPARTY';
+      const who = m.is_outgoing === 1 ? 'OWNER' : `USER:${m.sender_user_id ?? 'unknown'}`;
       const when = new Date(m.msg_date * 1000).toISOString();
       const id = `${m.chat_id}:${m.message_id}`;
       const text = m.text ?? '(no text / non-text message)';
@@ -76,20 +74,35 @@ function renderThread(messages: ThreadMessage[]): string {
     .join('\n');
 }
 
+function renderParticipants(participants: ProposalParticipant[]): string {
+  if (participants.length === 0) return '(none resolved)';
+  return participants
+    .map(
+      (p) =>
+        `- tg_user ${p.telegram_user_id} | ${p.name ?? '(unknown name)'} | identity:${p.status}` +
+        (p.attio_person_id ? ` | attio_person:${p.attio_person_id}` : '')
+    )
+    .join('\n');
+}
+
 function buildUserMessage(
-  identity: ResolvedIdentity,
+  deal: ResolvedDeal,
   chatTitle: string | null,
-  messages: ThreadMessage[]
+  messages: ThreadMessage[],
+  participants: ProposalParticipant[]
 ): string {
-  const snapshot = identity.attio_snapshot
-    ? JSON.stringify(identity.attio_snapshot, null, 2)
-    : 'null (no confident Attio match — propose changes but leave attio_record_id null)';
+  const snapshot = deal.deal_snapshot
+    ? JSON.stringify(deal.deal_snapshot, null, 2)
+    : `null (no confident deal match — read the thread but leave attio_record_id null; status=${deal.status})`;
 
   return [
-    `CHAT TITLE: ${chatTitle ?? '(none)'}`,
-    `RESOLVED IDENTITY STATUS: ${identity.status}`,
-    `ATTIO RECORD SNAPSHOT:`,
+    `GROUP CHAT TITLE: ${chatTitle ?? '(none)'}`,
+    `DEAL RESOLUTION STATUS: ${deal.status}`,
+    `MATCHED ATTIO DEAL SNAPSHOT:`,
     snapshot,
+    ``,
+    `RESOLVED PARTICIPANTS (senders in this chat):`,
+    renderParticipants(participants),
     ``,
     `MESSAGE THREAD (oldest first):`,
     renderThread(messages),
@@ -106,7 +119,6 @@ function totalChars(messages: ThreadMessage[]): number {
 // defensive JSON parsing
 // ---------------------------------------------------------------------------
 
-/** Pull the first balanced top-level JSON object out of arbitrary model text. */
 function extractJsonObject(text: string): string | null {
   const start = text.indexOf('{');
   if (start === -1) return null;
@@ -138,9 +150,7 @@ function clampConfidence(v: unknown): number {
 }
 
 function coerceAction(v: unknown): SuggestedAction {
-  return SUGGESTED_ACTIONS.includes(v as SuggestedAction)
-    ? (v as SuggestedAction)
-    : 'none';
+  return SUGGESTED_ACTIONS.includes(v as SuggestedAction) ? (v as SuggestedAction) : 'none';
 }
 
 function coerceSourceIds(v: unknown): string[] {
@@ -148,14 +158,28 @@ function coerceSourceIds(v: unknown): string[] {
   return v.filter((x): x is string => typeof x === 'string');
 }
 
+function coerceParticipants(v: unknown): Array<{ name: string; role?: string }> | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: Array<{ name: string; role?: string }> = [];
+  for (const item of v) {
+    if (item && typeof item === 'object') {
+      const o = item as Record<string, unknown>;
+      if (typeof o.name === 'string' && o.name.trim()) {
+        out.push({ name: o.name, ...(typeof o.role === 'string' ? { role: o.role } : {}) });
+      }
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /**
- * Parse the model's raw text into a normalized ClaudeExtraction. Always returns
- * a well-formed object; on unparseable output returns a zero-confidence,
- * no-op extraction (which the workflow will route to human review).
+ * Parse the model's raw text into a normalized ClaudeExtraction (deal-shaped).
+ * Always returns a well-formed object; on unparseable output returns a
+ * zero-confidence no-op (which the workflow routes to human review).
  */
 export function parseExtraction(raw: string): ClaudeExtraction {
   const fallback: ClaudeExtraction = {
-    attio_object: 'people',
+    attio_object: 'deals',
     attio_record_id: null,
     proposed_changes: {},
     suggested_action: 'none',
@@ -184,14 +208,16 @@ export function parseExtraction(raw: string): ClaudeExtraction {
       : {};
 
   const recId = obj.attio_record_id;
+  const participants = coerceParticipants(obj.participants);
   return {
-    attio_object: typeof obj.attio_object === 'string' ? obj.attio_object : 'people',
+    attio_object: typeof obj.attio_object === 'string' ? obj.attio_object : 'deals',
     attio_record_id: typeof recId === 'string' && recId.length > 0 ? recId : null,
     proposed_changes: changes,
     suggested_action: coerceAction(obj.suggested_action),
     confidence: clampConfidence(obj.confidence),
     rationale: typeof obj.rationale === 'string' ? obj.rationale : '',
     source_message_ids: coerceSourceIds(obj.source_message_ids),
+    ...(participants ? { participants } : {}),
   };
 }
 
@@ -203,11 +229,7 @@ interface AnthropicResponse {
   content?: Array<{ type: string; text?: string }>;
 }
 
-async function callMessages(
-  env: Env,
-  model: string,
-  userMessage: string
-): Promise<string> {
+async function callMessages(env: Env, model: string, userMessage: string): Promise<string> {
   const base = (env.ANTHROPIC_API_BASE || DEFAULT_ANTHROPIC_BASE).replace(/\/+$/, '');
   const res = await fetch(`${base}/v1/messages`, {
     method: 'POST',
@@ -231,41 +253,36 @@ async function callMessages(
   }
 
   const data = (await res.json()) as AnthropicResponse;
-  const text = (data.content ?? [])
+  return (data.content ?? [])
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text as string)
     .join('');
-  return text;
 }
 
 /**
- * Run extraction for a thread. Chooses Haiku by default; escalates to Sonnet
- * when the thread is long, or re-runs on Sonnet when the Haiku pass returns
- * low confidence. Output is parsed defensively into a ClaudeExtraction.
+ * Run deal extraction for a group thread. Haiku by default; escalates to Sonnet
+ * for long threads or low first-pass confidence. Output parsed defensively.
  */
 export async function extractFromThread(
   env: Env,
-  identity: ResolvedIdentity,
+  deal: ResolvedDeal,
   chatTitle: string | null,
-  messages: ThreadMessage[]
+  messages: ThreadMessage[],
+  participants: ProposalParticipant[]
 ): Promise<ExtractionResult> {
-  const userMessage = buildUserMessage(identity, chatTitle, messages);
+  const userMessage = buildUserMessage(deal, chatTitle, messages, participants);
 
   const longThread =
-    messages.length > LONG_THREAD_MESSAGE_COUNT ||
-    totalChars(messages) > LONG_THREAD_CHARS;
+    messages.length > LONG_THREAD_MESSAGE_COUNT || totalChars(messages) > LONG_THREAD_CHARS;
 
-  // Long threads go straight to Sonnet (single pass).
   if (longThread) {
     const raw = await callMessages(env, MODEL_SONNET, userMessage);
     return { extraction: parseExtraction(raw), model: MODEL_SONNET, escalated: true };
   }
 
-  // First pass on Haiku.
   const haikuRaw = await callMessages(env, MODEL_HAIKU, userMessage);
   const haiku = parseExtraction(haikuRaw);
 
-  // Escalate to Sonnet when first-pass confidence is low.
   if (haiku.confidence <= LOW_CONFIDENCE_THRESHOLD) {
     const sonnetRaw = await callMessages(env, MODEL_SONNET, userMessage);
     return { extraction: parseExtraction(sonnetRaw), model: MODEL_SONNET, escalated: true };

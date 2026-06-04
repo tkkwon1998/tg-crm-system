@@ -79,9 +79,34 @@ CREATE TABLE IF NOT EXISTS crm_proposals (
   applied_at          INTEGER,                   -- unix seconds when written to Attio; null until applied
   error               TEXT,                      -- last apply error, if any
   created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
-  updated_at          INTEGER NOT NULL DEFAULT (unixepoch())
+  updated_at          INTEGER NOT NULL DEFAULT (unixepoch()),
+  telegram_chat_id    INTEGER,                   -- originating group chat (deal-centric flow); null for legacy person proposals
+  participants_json   TEXT                       -- JSON array of resolved participants to associate with the deal
 );
 
 CREATE INDEX IF NOT EXISTS idx_proposals_status  ON crm_proposals (status);
 CREATE INDEX IF NOT EXISTS idx_proposals_record  ON crm_proposals (attio_record_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_created ON crm_proposals (created_at);
+CREATE INDEX IF NOT EXISTS idx_proposals_chat    ON crm_proposals (telegram_chat_id);
+
+-- =====================================================================
+-- deal_map — durable group chat_id <-> attio_deal_id resolution.
+--   status: unmatched | candidate | confirmed | rejected
+--   Populated by fuzzy chat-title -> Attio deal matching; a confirmed row is
+--   never re-matched. One deal per group chat.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS deal_map (
+  chat_id         INTEGER PRIMARY KEY,         -- Telegram group chat id
+  attio_deal_id   TEXT,                        -- resolved Attio deal record id; null while unmatched
+  status          TEXT NOT NULL DEFAULT 'unmatched'
+                    CHECK (status IN ('unmatched','candidate','confirmed','rejected')),
+  confidence      REAL NOT NULL DEFAULT 0,     -- 0.0-1.0
+  match_method    TEXT,                        -- 'fuzzy_title' | 'manual' | 'seed'
+  candidates_json TEXT,                        -- JSON array of candidate deals (for review)
+  chat_title      TEXT,                        -- denormalized chat title for readability
+  created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at      INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS idx_deal_map_status ON deal_map (status);
+CREATE INDEX IF NOT EXISTS idx_deal_map_deal   ON deal_map (attio_deal_id);

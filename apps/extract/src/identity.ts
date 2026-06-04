@@ -21,6 +21,7 @@ import {
   upsertIdentity,
   type IdentityCandidate,
   type IdentityMatch,
+  type ProposalParticipant,
 } from '@crm/db';
 import type { Env, ThreadMessage } from './env.js';
 
@@ -92,6 +93,65 @@ export function deriveSignals(
     display_name: chatTitle,
     phones: [...phones],
   };
+}
+
+/** Distinct non-owner sender ids in a thread, in first-seen order. */
+export function distinctSenders(messages: ThreadMessage[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const m of messages) {
+    if (m.is_outgoing === 1) continue; // owner is not a participant/contact
+    if (m.sender_user_id == null) continue;
+    if (seen.has(m.sender_user_id)) continue;
+    seen.add(m.sender_user_id);
+    out.push(m.sender_user_id);
+  }
+  return out;
+}
+
+/**
+ * Resolve the group's participants (deal-centric flow). For each distinct
+ * sender we look up an existing identity_map row; unmatched senders are
+ * persisted as 'unmatched' so they surface for manual linking. Only a
+ * 'confirmed' participant carries an attio_person_id (a real association target).
+ *
+ * This deliberately does NOT auto-match by name/phone per sender — a confirmed
+ * person link is a human decision; here we surface who's in the room and reuse
+ * any already-confirmed mapping.
+ */
+export async function resolveParticipants(
+  env: Env,
+  messages: ThreadMessage[]
+): Promise<ProposalParticipant[]> {
+  const db = env.DB;
+  const out: ProposalParticipant[] = [];
+  for (const userId of distinctSenders(messages)) {
+    const existing = await getIdentity(db, userId);
+    if (existing) {
+      out.push({
+        telegram_user_id: userId,
+        attio_person_id: existing.status === 'confirmed' ? existing.attio_record_id : null,
+        name: existing.display_name,
+        status: existing.status,
+      });
+      continue;
+    }
+    // First time we've seen this sender: record unmatched so it surfaces.
+    await upsertIdentity(db, {
+      telegram_user_id: userId,
+      attio_record_id: null,
+      status: 'unmatched',
+      confidence: 0,
+      match_method: 'group_participant',
+    });
+    out.push({
+      telegram_user_id: userId,
+      attio_person_id: null,
+      name: null,
+      status: 'unmatched',
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

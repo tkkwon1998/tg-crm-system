@@ -15,6 +15,9 @@
 /** identity_map.status */
 export type IdentityStatus = 'unmatched' | 'candidate' | 'confirmed' | 'rejected';
 
+/** deal_map.status (same lifecycle as identity resolution). */
+export type DealStatus = 'unmatched' | 'candidate' | 'confirmed' | 'rejected';
+
 /** crm_proposals.status */
 export type ProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected';
 
@@ -117,6 +120,60 @@ export interface IdentityCandidate {
 }
 
 // ---------------------------------------------------------------------------
+// deal_map
+// ---------------------------------------------------------------------------
+
+/** A row in deal_map (durable group chat_id <-> attio_deal_id). */
+export interface DealMatch {
+  chat_id: number;
+  attio_deal_id: string | null;
+  status: DealStatus;
+  /** 0.0–1.0 */
+  confidence: number;
+  /** e.g. 'fuzzy_title' | 'manual' | 'seed' */
+  match_method: string | null;
+  /** JSON array of candidate deals (for review), stored as TEXT */
+  candidates_json: string | null;
+  chat_title: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Input shape for upserting a deal mapping (keyed on chat_id). */
+export interface DealInput {
+  chat_id: number;
+  attio_deal_id?: string | null;
+  status: DealStatus;
+  confidence?: number;
+  match_method?: string | null;
+  /** JSON string or serializable array of candidates. */
+  candidates_json?: string | unknown[] | null;
+  chat_title?: string | null;
+}
+
+/** One candidate deal stored inside deal_map.candidates_json. */
+export interface DealCandidate {
+  attio_deal_id: string;
+  confidence: number;
+  match_method: string;
+  /** human-readable deal name + any matched fields for review */
+  label?: string;
+  matched_on?: Record<string, unknown>;
+}
+
+/** A resolved group participant carried on a deal proposal (associate as contact). */
+export interface ProposalParticipant {
+  telegram_user_id: number;
+  /** resolved Attio person record id, or null if unmatched */
+  attio_person_id: string | null;
+  name: string | null;
+  /** identity resolution status for this participant */
+  status: IdentityStatus;
+  /** optional role inferred from the thread (e.g. 'champion', 'decision_maker') */
+  role?: string;
+}
+
+// ---------------------------------------------------------------------------
 // crm_proposals
 // ---------------------------------------------------------------------------
 
@@ -124,10 +181,14 @@ export interface IdentityCandidate {
 export interface Proposal {
   id: number;
   telegram_user_id: number | null;
+  /** originating group chat (deal-centric flow); null for legacy person proposals */
+  telegram_chat_id: number | null;
   attio_object: AttioObject;
   attio_record_id: string | null;
   /** JSON object { "<attribute_slug>": <value> }, stored as TEXT */
   proposed_changes: string;
+  /** JSON array of ProposalParticipant to associate with the deal, stored as TEXT */
+  participants_json: string | null;
   suggested_action: SuggestedAction;
   /** 0.0–1.0 */
   confidence: number;
@@ -144,10 +205,13 @@ export interface Proposal {
 /** Input shape for inserting a proposal. */
 export interface ProposalInput {
   telegram_user_id?: number | null;
+  telegram_chat_id?: number | null;
   attio_object?: AttioObject;
   attio_record_id?: string | null;
   /** JSON string or a plain object of attribute_slug -> value. */
   proposed_changes: string | Record<string, unknown>;
+  /** JSON string or array of ProposalParticipant to associate with the deal. */
+  participants?: string | ProposalParticipant[] | null;
   suggested_action?: SuggestedAction;
   confidence?: number;
   rationale?: string | null;
@@ -180,4 +244,10 @@ export interface ClaudeExtraction {
   rationale: string;
   /** array of "<chat_id>:<message_id>" strings */
   source_message_ids: string[];
+  /**
+   * Deal-centric flow only: participant roles the model inferred from the
+   * thread (names as they appear in chat + optional role). Merged with the
+   * deterministic sender->person resolution; advisory, not a write source.
+   */
+  participants?: Array<{ name: string; role?: string }>;
 }
