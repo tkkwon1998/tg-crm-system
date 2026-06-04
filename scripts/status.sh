@@ -27,7 +27,14 @@ echo "===================  CRM PIPELINE STATUS  ===================="
 echo " db=${DB_NAME}  scope=${D1_FLAG}  at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 hr
 
-echo "INGESTION FRESHNESS (newest message + total)"
+echo "LAST RUN PER COMPONENT (heartbeat — the real liveness signal)"
+q "SELECT component, datetime(updated_at,'unixepoch') AS last_run_utc, \
+         (strftime('%s','now') - updated_at) AS age_seconds, \
+         ok, substr(detail,1,60) AS detail \
+   FROM system_status ORDER BY component;"
+hr
+
+echo "INGESTION FRESHNESS (newest message + total — tracks Telegram traffic, not health)"
 q "SELECT datetime(MAX(msg_date),'unixepoch') AS newest_utc, \
          (strftime('%s','now') - MAX(msg_date)) AS age_seconds, \
          COUNT(*) AS total_messages \
@@ -46,7 +53,7 @@ echo "IDENTITY RESOLUTION HEALTH (identity_map by status)"
 q "SELECT status, COUNT(*) AS n FROM identity_map GROUP BY status ORDER BY status;"
 hr
 
-echo "CHAT CURSORS (most recently advanced — proxy for last cron success)"
+echo "CHAT CURSORS (most recently advanced — last message ACTIVITY, not run health)"
 q "SELECT chat_id, chat_title, last_message_id, datetime(updated_at,'unixepoch') AS updated_utc \
    FROM chat_cursors ORDER BY updated_at DESC LIMIT 5;"
 hr
