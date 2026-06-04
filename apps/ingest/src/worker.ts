@@ -255,7 +255,10 @@ async function callContainer(
       throw new Error(`ingest: container /fetch returned ${res.status}: ${detail.slice(0, 500)}`);
     }
 
-    const parsed = (await res.json()) as Partial<FetchResponse>;
+    const parsed = (await res.json()) as Partial<FetchResponse> & { debug?: unknown };
+    if (parsed.debug) {
+      console.log(`ingest: container debug ${JSON.stringify(parsed.debug)}`);
+    }
     return {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       cursors: Array.isArray(parsed.cursors) ? parsed.cursors : [],

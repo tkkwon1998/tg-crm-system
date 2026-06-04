@@ -252,13 +252,38 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"error": "not found"})
 
+    def _read_body(self) -> bytes:
+        """Read the full request body, handling BOTH Content-Length and
+        Transfer-Encoding: chunked. The DO->container proxy streams the request
+        chunked (no Content-Length), so a Content-Length-only reader silently
+        gets an empty body — which dropped the cursor map and forced a full
+        re-fetch every run."""
+        te = (self.headers.get("transfer-encoding") or "").lower()
+        if "chunked" in te:
+            chunks = []
+            while True:
+                size_line = self.rfile.readline().strip()
+                if not size_line:
+                    continue
+                try:
+                    size = int(size_line.split(b";", 1)[0], 16)
+                except ValueError:
+                    break
+                if size == 0:
+                    self.rfile.readline()  # consume trailing CRLF
+                    break
+                chunks.append(self.rfile.read(size))
+                self.rfile.readline()  # consume the CRLF after each chunk
+            return b"".join(chunks)
+        length = int(self.headers.get("content-length") or 0)
+        return self.rfile.read(length) if length > 0 else b""
+
     def do_POST(self):  # noqa: N802 - stdlib signature
         if self.path != "/fetch":
             self._send_json(404, {"error": "not found"})
             return
         try:
-            length = int(self.headers.get("content-length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
+            raw = self._read_body()
             req = json.loads(raw or b"{}")
         except Exception as exc:  # noqa: BLE001
             self._send_json(400, {"error": f"bad request body: {exc}"})
@@ -267,6 +292,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # Each request gets its own event loop; the server is threaded.
             result = asyncio.run(_fetch(req, self.headers))
+            # Diagnostic echoed back (container stdout does not reach wrangler
+            # tail): confirms how many cursors actually arrived + body framing.
+            result["debug"] = {
+                "received_cursors": len(req.get("cursors") or []),
+                "body_bytes": len(raw),
+                "transfer_encoding": self.headers.get("transfer-encoding"),
+                "content_length": self.headers.get("content-length"),
+            }
             self._send_json(200, result)
         except Exception as exc:  # noqa: BLE001
             log.exception("fetch failed")
