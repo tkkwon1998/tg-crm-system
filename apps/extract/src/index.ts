@@ -19,7 +19,7 @@
 
 import { getUnextractedMessages, type Message } from '@crm/db';
 import type { Env, ThreadMessage, ThreadWorkflowParams } from './env.js';
-import { attioDealsDiag } from './deals.js';
+import { attioDealsDiag, resolveDeal } from './deals.js';
 
 export { ExtractWorkflow } from './workflow.js';
 
@@ -119,6 +119,24 @@ export default {
     // Diagnostic: positively confirm the Attio deals read (status + names).
     if (req.method === 'GET' && url.pathname === '/diag/deals') {
       return Response.json(await attioDealsDiag(env));
+    }
+    // Force a fresh chat->deal resolution (bypasses the once-per-thread Workflow
+    // idempotency). Re-matches a chat whose deal_map row is stale/unmatched.
+    //   curl -X POST ".../diag/resolve?chat=-4970122657"
+    if (req.method === 'POST' && url.pathname === '/diag/resolve') {
+      const chatId = Number(url.searchParams.get('chat'));
+      if (!Number.isFinite(chatId)) {
+        return Response.json({ error: 'pass ?chat=<telegram_chat_id>' }, { status: 400 });
+      }
+      const row = await env.DB.prepare('SELECT chat_title FROM chat_cursors WHERE chat_id = ?1')
+        .bind(chatId)
+        .first<{ chat_title: string | null }>();
+      try {
+        const resolved = await resolveDeal(env, chatId, row?.chat_title ?? null);
+        return Response.json({ ok: true, resolved });
+      } catch (e) {
+        return Response.json({ ok: false, error: (e as Error).message }, { status: 502 });
+      }
     }
     if (req.method !== 'POST') {
       return new Response('extract worker: POST to trigger a dispatch pass; GET /diag/deals to check Attio\n', {

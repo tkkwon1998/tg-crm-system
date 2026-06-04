@@ -167,23 +167,23 @@ export async function attioDealsDiag(env: Env, limit = 200): Promise<AttioDealsD
   }
 }
 
-/** List deals from Attio (best-effort, paged once). Returns [] on any error. */
+/**
+ * List deals from Attio (paged once). THROWS on a failed read so the caller (the
+ * Workflow step) RETRIES rather than caching a false 'unmatched' — a swallowed
+ * transient error previously poisoned matches permanently.
+ */
 async function listDeals(env: Env, limit = 200): Promise<AttioRecord[]> {
-  try {
-    const res = await fetch(`${attioBase(env)}/v2/objects/deals/records/query`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${env.ATTIO_TOKEN}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ limit }),
-    });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { data?: AttioRecord[] };
-    return Array.isArray(data.data) ? data.data : [];
-  } catch {
-    return [];
+  const res = await fetch(`${attioBase(env)}/v2/objects/deals/records/query`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.ATTIO_TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Attio deals query ${res.status}: ${body.slice(0, 200)}`);
   }
+  const data = (await res.json()) as { data?: AttioRecord[] };
+  return Array.isArray(data.data) ? data.data : [];
 }
 
 // ---------------------------------------------------------------------------
