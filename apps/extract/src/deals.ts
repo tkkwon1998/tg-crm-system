@@ -130,6 +130,43 @@ function recordId(rec: AttioRecord): string | null {
   return rec.id?.record_id ?? null;
 }
 
+export interface AttioDealsDiag {
+  ok: boolean;
+  status: number | null;
+  count: number;
+  sampleNames: string[];
+  error: string | null;
+}
+
+/**
+ * Diagnostic: live Attio deals query that does NOT swallow errors, so we can
+ * positively confirm reads work (and see deal names) vs. a silent failure.
+ */
+export async function attioDealsDiag(env: Env, limit = 200): Promise<AttioDealsDiag> {
+  try {
+    const res = await fetch(`${attioBase(env)}/v2/objects/deals/records/query`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${env.ATTIO_TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ limit }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { ok: false, status: res.status, count: 0, sampleNames: [], error: body.slice(0, 400) };
+    }
+    const data = (await res.json()) as { data?: AttioRecord[] };
+    const recs = Array.isArray(data.data) ? data.data : [];
+    return {
+      ok: true,
+      status: res.status,
+      count: recs.length,
+      sampleNames: recs.map(dealName).filter((n) => n).slice(0, 30),
+      error: null,
+    };
+  } catch (e) {
+    return { ok: false, status: null, count: 0, sampleNames: [], error: (e as Error).message };
+  }
+}
+
 /** List deals from Attio (best-effort, paged once). Returns [] on any error. */
 async function listDeals(env: Env, limit = 200): Promise<AttioRecord[]> {
   try {

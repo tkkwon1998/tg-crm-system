@@ -19,6 +19,7 @@
 
 import { getUnextractedMessages, type Message } from '@crm/db';
 import type { Env, ThreadMessage, ThreadWorkflowParams } from './env.js';
+import { attioDealsDiag } from './deals.js';
 
 export { ExtractWorkflow } from './workflow.js';
 
@@ -114,8 +115,13 @@ export default {
   // A manual trigger for ops/backfill: `curl` the deployed Worker to force a
   // dispatch pass without waiting for cron. Not part of the steady-state path.
   async fetch(req: Request, env: Env): Promise<Response> {
+    const url = new URL(req.url);
+    // Diagnostic: positively confirm the Attio deals read (status + names).
+    if (req.method === 'GET' && url.pathname === '/diag/deals') {
+      return Response.json(await attioDealsDiag(env));
+    }
     if (req.method !== 'POST') {
-      return new Response('extract worker: POST to trigger a dispatch pass\n', {
+      return new Response('extract worker: POST to trigger a dispatch pass; GET /diag/deals to check Attio\n', {
         status: 405,
       });
     }
