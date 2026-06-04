@@ -50,6 +50,8 @@ export interface Env {
   ATTIO_PEOPLE_MATCHING_ATTRIBUTE?: string;
   /** The Deals attribute that holds associated people (record reference). */
   ATTIO_DEAL_PEOPLE_ATTRIBUTE?: string;
+  /** 'true' to associate confirmed participants on the deal. Off => notes only. */
+  ATTIO_LINK_PARTICIPANTS?: string;
   ATTIO_API_BASE?: string;
   APPLY_BATCH_LIMIT?: string;
 }
@@ -163,7 +165,7 @@ async function applyPerson(
     await attio.createNote({
       parentObject: 'people',
       parentRecordId: writtenRecordId,
-      title: `Telegram enrichment — proposal #${p.id}`,
+      title: `${noteDate()} — Telegram enrichment (proposal #${p.id})`,
       content: buildPersonNote(p, changes, sources),
     });
     await markStatus(db, p.id, 'applied', null);
@@ -222,7 +224,7 @@ async function applyDeal(
     await attio.createNote({
       parentObject: 'deals',
       parentRecordId: dealId,
-      title: `Telegram deal enrichment — proposal #${p.id}`,
+      title: `${noteDate()} — Telegram deal enrichment (proposal #${p.id})`,
       content: buildDealNote(p, write, review, sources, participants),
     });
   } catch (e) {
@@ -230,8 +232,9 @@ async function applyDeal(
     return false;
   }
 
-  // 2. BEST-EFFORT: write allowlisted fields. A failure (e.g. unknown slug) is
-  //    logged and recorded as a soft note, but does NOT fail the proposal.
+  // 2. BEST-EFFORT: write mapped fields. Disabled while DEAL_FIELD_MAP is empty
+  //    (notes-only). A failure (e.g. unknown slug) is recorded as a soft note,
+  //    never fails the proposal.
   let softError: string | null = null;
   if (Object.keys(write).length > 0) {
     try {
@@ -242,11 +245,13 @@ async function applyDeal(
     }
   }
 
-  // 3. BEST-EFFORT: associate confirmed participants (people with a resolved id).
+  // 3. BEST-EFFORT: associate confirmed participants — only when explicitly
+  //    enabled (ATTIO_LINK_PARTICIPANTS=true). Off by default => notes only.
+  const linkParticipants = (env.ATTIO_LINK_PARTICIPANTS ?? 'false').toLowerCase() === 'true';
   const newPersonIds = participants
     .map((pt) => pt.attio_person_id)
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
-  if (newPersonIds.length > 0) {
+  if (linkParticipants && newPersonIds.length > 0) {
     try {
       await associatePeople(attio, dealId, peopleAttr, newPersonIds);
     } catch (e) {
@@ -258,6 +263,11 @@ async function applyDeal(
 
   await markStatus(db, p.id, 'applied', softError);
   return true;
+}
+
+/** UTC calendar date (YYYY-MM-DD) the note is being created on. */
+function noteDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function errMsg(e: unknown): string {

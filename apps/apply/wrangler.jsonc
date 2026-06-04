@@ -35,11 +35,13 @@
     // Comma-separated safe attribute slugs eligible for auto-apply (PEOPLE).
     "SAFE_ATTRIBUTE_ALLOWLIST": "phone,phone_numbers,email,email_addresses,job_title,title",
     // DEAL field map: Claude semantic slug = real Attio deal attribute slug.
-    // Only mapped fields are written (to the mapped slug); everything else is
-    // surfaced in the provenance note for review. Verified writable in this
-    // workspace: next_due_task_4 ("Next Due Task", text), next_due_task_date
-    // ("Next Due Task Date", date).
-    "DEAL_FIELD_MAP": "next_step=next_due_task_4,next_step_date=next_due_task_date",
+    // EMPTY = notes-only mode (no deal field is changed). Field suggestions are
+    // surfaced inside the provenance note instead. To enable field writes later,
+    // add pairs, e.g. "next_step=next_due_task_4,next_step_date=next_due_task_date".
+    "DEAL_FIELD_MAP": "",
+    // Associating participants edits a deal field too — off for notes-only mode.
+    // Set "true" later to link confirmed participants on the deal.
+    "ATTIO_LINK_PARTICIPANTS": "false",
     // Attribute slug used to dedupe (matching_attribute) on assert_person.
     "ATTIO_PEOPLE_MATCHING_ATTRIBUTE": "email_addresses",
     // The Deals attribute holding associated people (record reference). Attio's
