@@ -27,7 +27,9 @@
   // IngestContainer Durable Object class exported from the Worker.
   "containers": [
     {
-      "name": "INGEST_CONTAINER",
+      // Image/app name — used as the Docker image tag, so it MUST be lowercase.
+      // (The code binding stays "INGEST_CONTAINER" via durable_objects below.)
+      "name": "ingest-container",
       "class_name": "IngestContainer",
       "image": "./container/Dockerfile",
       "max_instances": 1,
