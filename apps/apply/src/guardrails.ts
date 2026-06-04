@@ -22,8 +22,10 @@ import type { Proposal } from '@crm/db';
 
 export interface ApplyConfig {
   autoApplyConfidenceThreshold: number;
-  /** lower-cased, trimmed safe attribute slugs */
+  /** lower-cased, trimmed safe attribute slugs for PEOPLE proposals */
   safeAttributeAllowlist: Set<string>;
+  /** lower-cased, trimmed safe (non-stage) attribute slugs for DEAL proposals */
+  dealSafeAttributeAllowlist: Set<string>;
 }
 
 /** Slugs that, if present in proposed_changes, indicate a deal-stage move. */
@@ -87,35 +89,67 @@ export function decide(p: Proposal, cfg: ApplyConfig): Decision {
 
   const humanApproved = p.status === 'approved';
 
-  // Rule 2: no confident match => never write. (Absolute.)
+  // Rule 2 (absolute): no confident/confirmed write target => never write.
+  // For deals, p.attio_record_id is the live confirmed deal id resolved upstream
+  // (null until the chat->deal match is confirmed).
   if (p.attio_record_id === null || p.attio_record_id === '') {
     return humanApproved
-      ? { kind: 'block', reason: 'attio_record_id is null — cannot write; needs manual linking' }
-      : { kind: 'skip', reason: 'attio_record_id is null — queued for manual linking' };
+      ? { kind: 'block', reason: 'no write target (record id null) — confirm/link the match first' }
+      : { kind: 'skip', reason: 'no confirmed target — confirm the chat->deal match first' };
   }
 
-  // Rule 3a: deal-stage moves always require explicit human approval.
-  if (p.attio_object === 'deals' || touchesDealStage(changes)) {
+  if (p.attio_object === 'deals') return decideDeal(p, changes, cfg, humanApproved);
+  if (p.attio_object === 'people') return decidePeople(p, changes, cfg, humanApproved);
+
+  // Any other object (e.g. companies) is never auto-applied.
+  return humanApproved
+    ? { kind: 'block', reason: `auto-apply supports people/deals only, got '${p.attio_object}'` }
+    : { kind: 'skip', reason: `object '${p.attio_object}' requires explicit human approval` };
+}
+
+/** Decision logic for DEAL proposals (default-deny non-stage allowlist). */
+function decideDeal(
+  p: Proposal,
+  changes: Record<string, unknown>,
+  cfg: ApplyConfig,
+  humanApproved: boolean
+): Decision {
+  // A human reviewed it: apply whatever they approved + note + participants.
+  // Empty changes is fine for deals — the provenance note + participant links
+  // are themselves valuable, additive writes.
+  if (humanApproved) return { kind: 'apply', reason: 'human-approved deal' };
+
+  // Auto path: confidence gate, then default-deny on the safe deal allowlist.
+  if (p.confidence < cfg.autoApplyConfidenceThreshold) {
+    return { kind: 'skip', reason: `confidence ${p.confidence} < threshold ${cfg.autoApplyConfidenceThreshold}` };
+  }
+  const unsafe = Object.keys(changes).filter(
+    (s) => !cfg.dealSafeAttributeAllowlist.has(s.trim().toLowerCase())
+  );
+  if (unsafe.length > 0) {
+    return {
+      kind: 'skip',
+      reason: `non-allowlisted deal field(s) [${unsafe.join(', ')}] (stage/commercial) — route to review`,
+    };
+  }
+  // Confirmed deal + confident + only allowlisted (or no) field changes.
+  return { kind: 'apply', reason: `auto-apply deal: confidence ${p.confidence} >= ${cfg.autoApplyConfidenceThreshold}, fields allowlisted/none` };
+}
+
+/** Decision logic for PEOPLE proposals (unchanged contract). */
+function decidePeople(
+  p: Proposal,
+  changes: Record<string, unknown>,
+  cfg: ApplyConfig,
+  humanApproved: boolean
+): Decision {
+  // A deal-stage slug on a person record always needs a human.
+  if (touchesDealStage(changes)) {
     return humanApproved
-      ? {
-          kind: 'block',
-          reason:
-            'deal-stage moves are never auto-applied by this Worker; apply manually in Attio',
-        }
+      ? { kind: 'block', reason: 'deal-stage move on a people record — apply manually in Attio' }
       : { kind: 'skip', reason: 'deal-stage move — requires explicit human approval' };
   }
 
-  // Rule 3b: new-record creation always requires explicit human approval.
-  // suggested_action 'none' with no record id was caught above; an object other
-  // than people (companies/deals) is treated as a creation-class change here.
-  if (p.attio_object !== 'people') {
-    return humanApproved
-      ? { kind: 'block', reason: `auto-apply only supports the 'people' object, got '${p.attio_object}'` }
-      : { kind: 'skip', reason: `object '${p.attio_object}' requires explicit human approval` };
-  }
-
-  // A human already approved a people-record update against an existing record:
-  // apply it (the human IS the gate). Empty change-set is a no-op block.
   if (humanApproved) {
     if (Object.keys(changes).length === 0) {
       return { kind: 'block', reason: 'approved proposal has no proposed_changes' };
@@ -123,14 +157,9 @@ export function decide(p: Proposal, cfg: ApplyConfig): Decision {
     return { kind: 'apply', reason: 'human-approved' };
   }
 
-  // Rule 1: auto-apply gate for pending proposals.
   if (p.confidence < cfg.autoApplyConfidenceThreshold) {
-    return {
-      kind: 'skip',
-      reason: `confidence ${p.confidence} < threshold ${cfg.autoApplyConfidenceThreshold}`,
-    };
+    return { kind: 'skip', reason: `confidence ${p.confidence} < threshold ${cfg.autoApplyConfidenceThreshold}` };
   }
-
   const slugs = Object.keys(changes);
   if (slugs.length === 0) {
     return { kind: 'skip', reason: 'no proposed_changes to apply' };
@@ -142,7 +171,6 @@ export function decide(p: Proposal, cfg: ApplyConfig): Decision {
       reason: `non-allowlisted attribute(s) [${unsafe.join(', ')}] — route to review`,
     };
   }
-
   return {
     kind: 'apply',
     reason: `auto-apply: confidence ${p.confidence} >= ${cfg.autoApplyConfidenceThreshold}, all attrs allowlisted`,

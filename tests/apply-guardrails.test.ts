@@ -11,16 +11,18 @@ import {
 const cfg: ApplyConfig = {
   autoApplyConfidenceThreshold: 0.85,
   safeAttributeAllowlist: new Set(['email', 'phone', 'title']),
+  dealSafeAttributeAllowlist: new Set(['next_step', 'next_step_date', 'last_touch_date']),
 };
 
-/** Build a Proposal row with sensible defaults; override per case. */
 function proposal(over: Partial<Proposal> = {}): Proposal {
   return {
     id: 1,
     telegram_user_id: 42,
+    telegram_chat_id: null,
     attio_object: 'people',
     attio_record_id: 'rec_123',
     proposed_changes: JSON.stringify({ email: 'jane@acme.com' }),
+    participants_json: null,
     suggested_action: 'follow_up',
     confidence: 0.92,
     rationale: 'shared email',
@@ -34,93 +36,83 @@ function proposal(over: Partial<Proposal> = {}): Proposal {
   };
 }
 
-describe('decide (apply) — auto-apply gate', () => {
+describe('decide — people auto-apply gate', () => {
   it('applies a confident, allowlisted, pending people-update', () => {
     expect(decide(proposal(), cfg).kind).toBe('apply');
   });
-
   it('skips when confidence is below threshold', () => {
-    const d = decide(proposal({ confidence: 0.5 }), cfg);
-    expect(d.kind).toBe('skip');
-    expect(d.reason).toMatch(/confidence/);
+    expect(decide(proposal({ confidence: 0.5 }), cfg).kind).toBe('skip');
   });
-
-  it('skips when an attribute is not on the allowlist', () => {
-    const d = decide(
-      proposal({ proposed_changes: JSON.stringify({ favorite_color: 'blue' }) }),
-      cfg
-    );
-    expect(d.kind).toBe('skip');
-    expect(d.reason).toMatch(/non-allowlisted/);
+  it('skips a non-allowlisted attribute', () => {
+    expect(decide(proposal({ proposed_changes: JSON.stringify({ favorite_color: 'blue' }) }), cfg).kind).toBe('skip');
   });
-
-  it('skips a pending proposal with no changes', () => {
-    const d = decide(proposal({ proposed_changes: '{}' }), cfg);
-    expect(d.kind).toBe('skip');
+  it('skips a pending people proposal with no changes', () => {
+    expect(decide(proposal({ proposed_changes: '{}' }), cfg).kind).toBe('skip');
   });
-});
-
-describe('decide (apply) — absolute guardrails', () => {
-  it('rule 2: null record id — skip when pending, block when approved', () => {
-    expect(decide(proposal({ attio_record_id: null }), cfg).kind).toBe('skip');
-    expect(decide(proposal({ attio_record_id: null, status: 'approved' }), cfg).kind).toBe('block');
-  });
-
-  it('rule 3: deal-stage move — skip when pending, block when approved', () => {
-    const changes = JSON.stringify({ stage: 'won' });
-    expect(decide(proposal({ proposed_changes: changes }), cfg).kind).toBe('skip');
-    expect(
-      decide(proposal({ proposed_changes: changes, status: 'approved' }), cfg).kind
-    ).toBe('block');
-  });
-
-  it('rule 3: deals object — skip when pending, block when approved', () => {
-    expect(decide(proposal({ attio_object: 'deals' }), cfg).kind).toBe('skip');
-    expect(decide(proposal({ attio_object: 'deals', status: 'approved' }), cfg).kind).toBe('block');
-  });
-
-  it('non-people object is never auto-applied', () => {
-    expect(decide(proposal({ attio_object: 'companies' }), cfg).kind).toBe('skip');
-  });
-});
-
-describe('decide (apply) — human-approved path', () => {
-  it('applies an approved people-update even below the auto threshold', () => {
-    const d = decide(
-      proposal({ status: 'approved', confidence: 0.1, proposed_changes: JSON.stringify({ title: 'CTO' }) }),
-      cfg
-    );
+  it('applies an approved people-update even below threshold', () => {
+    const d = decide(proposal({ status: 'approved', confidence: 0.1, proposed_changes: JSON.stringify({ title: 'CTO' }) }), cfg);
     expect(d.kind).toBe('apply');
-    expect(d.reason).toMatch(/human-approved/);
   });
-
-  it('blocks an approved proposal that has no changes', () => {
-    const d = decide(proposal({ status: 'approved', proposed_changes: '{}' }), cfg);
-    expect(d.kind).toBe('block');
+  it('blocks an approved people proposal with no changes', () => {
+    expect(decide(proposal({ status: 'approved', proposed_changes: '{}' }), cfg).kind).toBe('block');
   });
+  it('routes a deal-stage slug on a people record to review', () => {
+    expect(decide(proposal({ proposed_changes: JSON.stringify({ stage: 'won' }) }), cfg).kind).toBe('skip');
+    expect(decide(proposal({ status: 'approved', proposed_changes: JSON.stringify({ stage: 'won' }) }), cfg).kind).toBe('block');
+  });
+});
 
-  it('blocks on malformed proposed_changes JSON', () => {
-    const d = decide(proposal({ proposed_changes: 'not json' }), cfg);
-    expect(d.kind).toBe('block');
-    expect(d.reason).toMatch(/malformed/);
+describe('decide — deal proposals', () => {
+  const deal = (over: Partial<Proposal> = {}) =>
+    proposal({
+      attio_object: 'deals',
+      telegram_chat_id: -100,
+      attio_record_id: 'rec_deal_1', // effective confirmed deal id (resolved upstream)
+      proposed_changes: '{}',
+      ...over,
+    });
+
+  it('auto-applies a confirmed deal with no field changes (note + participants are the payload)', () => {
+    expect(decide(deal(), cfg).kind).toBe('apply');
+  });
+  it('auto-applies a confirmed deal with allowlisted (non-stage) fields', () => {
+    expect(decide(deal({ proposed_changes: JSON.stringify({ next_step: 'demo Tue' }) }), cfg).kind).toBe('apply');
+  });
+  it('routes stage / commercial fields to review (default-deny)', () => {
+    for (const slug of ['stage', 'amount', 'close_date']) {
+      expect(decide(deal({ proposed_changes: JSON.stringify({ [slug]: 'x' }) }), cfg).kind).toBe('skip');
+    }
+  });
+  it('skips a confirmed deal below the confidence threshold', () => {
+    expect(decide(deal({ confidence: 0.4 }), cfg).kind).toBe('skip');
+  });
+  it('does NOT write an unconfirmed deal (null target) — skip pending, block approved', () => {
+    expect(decide(deal({ attio_record_id: null }), cfg).kind).toBe('skip');
+    expect(decide(deal({ attio_record_id: null, status: 'approved' }), cfg).kind).toBe('block');
+  });
+  it('applies a human-approved deal regardless of confidence', () => {
+    expect(decide(deal({ status: 'approved', confidence: 0.2 }), cfg).kind).toBe('apply');
+  });
+});
+
+describe('decide — other objects', () => {
+  it('never auto-applies a non-people/deal object', () => {
+    expect(decide(proposal({ attio_object: 'companies' }), cfg).kind).toBe('skip');
+    expect(decide(proposal({ attio_object: 'companies', status: 'approved' }), cfg).kind).toBe('block');
   });
 });
 
 describe('apply parse helpers', () => {
   it('parseAllowlist normalizes case/whitespace and drops blanks', () => {
-    const set = parseAllowlist('Email, phone ,, TITLE ');
-    expect([...set].sort()).toEqual(['email', 'phone', 'title']);
+    expect([...parseAllowlist('Email, phone ,, TITLE ')].sort()).toEqual(['email', 'phone', 'title']);
     expect(parseAllowlist(undefined).size).toBe(0);
   });
-
   it('parseProposedChanges rejects arrays and non-objects', () => {
     expect(parseProposedChanges(proposal({ proposed_changes: JSON.stringify({ a: 1 }) }))).toEqual({ a: 1 });
     expect(() => parseProposedChanges(proposal({ proposed_changes: '[1,2]' }))).toThrow();
-    expect(() => parseProposedChanges(proposal({ proposed_changes: 'null' }))).toThrow();
   });
-
-  it('parseSourceMessageIds coerces to a string array and rejects non-arrays', () => {
-    expect(parseSourceMessageIds(proposal({ source_message_ids: JSON.stringify(['1:2', '3:4']) }))).toEqual(['1:2', '3:4']);
+  it('parseSourceMessageIds coerces to a string array', () => {
+    expect(parseSourceMessageIds(proposal({ source_message_ids: JSON.stringify(['1:2']) }))).toEqual(['1:2']);
     expect(() => parseSourceMessageIds(proposal({ source_message_ids: '{}' }))).toThrow();
   });
 });

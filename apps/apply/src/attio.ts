@@ -89,6 +89,33 @@ export class AttioClient {
     return out.data;
   }
 
+  /** Fetch a single record by id (used to read-merge-write reference attributes). */
+  async getRecord(object: AttioObject, recordId: string): Promise<AttioRecord> {
+    const out = await this.request<{ data: AttioRecord }>(
+      'GET',
+      `/v2/objects/${encodeURIComponent(object)}/records/${encodeURIComponent(recordId)}`
+    );
+    return out.data;
+  }
+
+  /**
+   * Update specific attributes on an existing record by id (PATCH replaces the
+   * given attribute values; attributes not listed are untouched). Used for deal
+   * field writes and for setting the associated-people reference attribute.
+   */
+  async patchRecord(
+    object: AttioObject,
+    recordId: string,
+    values: Record<string, unknown>
+  ): Promise<AttioRecord> {
+    const out = await this.request<{ data: AttioRecord }>(
+      'PATCH',
+      `/v2/objects/${encodeURIComponent(object)}/records/${encodeURIComponent(recordId)}`,
+      { data: { values } }
+    );
+    return out.data;
+  }
+
   /** Create a markdown note attached to a record (provenance). */
   async createNote(args: {
     parentObject: AttioObject;
