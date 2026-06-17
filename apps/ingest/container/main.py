@@ -114,11 +114,20 @@ async def _fetch(req: dict, headers) -> dict:
     errors: list[dict] = []
 
     client = TelegramClient(StringSession(session), api_id, api_hash)
-    await client.connect()
+    # Fail FAST with a precise error instead of hanging until the Worker's 150s
+    # abort: a dead/blocked session can make connect() or the auth check hang.
     try:
-        if not await client.is_user_authorized():
+        await asyncio.wait_for(client.connect(), timeout=20)
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            "telegram connect timed out after 20s — network issue or the account/session is "
+            "being blocked by Telegram (regenerate TG_SESSION; the account may be restricted)"
+        )
+    try:
+        authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=20)
+        if not authorized:
             raise RuntimeError(
-                "Telegram session is not authorized (TG_SESSION invalid or revoked)"
+                "telegram session is not authorized (TG_SESSION invalid/revoked — regenerate it)"
             )
 
         # Discover dialogs. We process: every chat with a stored cursor, plus
