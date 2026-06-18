@@ -6,12 +6,14 @@
   "compatibility_date": "2025-05-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Cron: catch-up every 10 min (tuned for sparse volume — a few msgs/hours).
-  // Latency is bounded by this interval; the spec tolerates minutes. Each run
-  // cold-starts the container, so a slower cadence cuts container cost ~10x vs
-  // every-minute. Bump back toward "*/1" only if volume/latency needs demand it.
+  // Cron DISABLED: Telegram blocks MTProto from Cloudflare container egress IPs
+  // (TCP connects, handshake stalls). Ingest moved off-Cloudflare to
+  // scripts/ingest_local.py, run on a Telegram-reachable host and writing to D1
+  // via REST. This Worker + container stay deployed for reference/backfill but no
+  // longer run on a schedule. (Re-enable the cron only if CF<->Telegram becomes
+  // reachable again.)
   "triggers": {
-    "crons": ["*/10 * * * *"]
+    "crons": []
   },
 
   // Shared D1 database. Binding name MUST be "DB" (contract). database_id is
