@@ -43,6 +43,7 @@ import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telethon import TelegramClient
+from telethon.network import ConnectionTcpObfuscated
 from telethon.sessions import StringSession
 
 # Raw-TCP connectivity probe targets. Control = general egress; the rest are
@@ -142,7 +143,12 @@ async def _fetch(req: dict, headers) -> dict:
     advanced: dict[int, dict] = {}
     errors: list[dict] = []
 
-    client = TelegramClient(StringSession(session), api_id, api_hash)
+    # Obfuscated transport: TCP to Telegram works but the MTProto handshake
+    # stalls (DPI filtering the recognizable protocol framing from this IP).
+    # The obfuscated connection randomizes framing to evade that.
+    client = TelegramClient(
+        StringSession(session), api_id, api_hash, connection=ConnectionTcpObfuscated
+    )
     # Fail FAST with a precise error instead of hanging until the Worker's 150s
     # abort: a dead/blocked session can make connect() or the auth check hang.
     try:
