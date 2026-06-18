@@ -78,7 +78,7 @@ def now() -> int:
 
 def record_status(ok: bool, detail: str) -> None:
     d1(
-        "INSERT INTO system_status (component, updated_at, ok, detail) VALUES (?1,?2,?3,?4) "
+        "INSERT INTO system_status (component, updated_at, ok, detail) VALUES (?,?,?,?) "
         "ON CONFLICT(component) DO UPDATE SET updated_at=excluded.updated_at, ok=excluded.ok, detail=excluded.detail",
         ["ingest", now(), 1 if ok else 0, detail[:500]],
     )
@@ -104,7 +104,7 @@ def upsert_message(m: dict) -> None:
     d1(
         "INSERT INTO telegram_messages "
         "(chat_id, message_id, sender_user_id, chat_title, text, msg_date, is_outgoing, raw_json, ingested_at) "
-        "VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) "
+        "VALUES (?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT (chat_id, message_id) DO UPDATE SET "
         "sender_user_id=excluded.sender_user_id, chat_title=excluded.chat_title, text=excluded.text, "
         "msg_date=excluded.msg_date, is_outgoing=excluded.is_outgoing, raw_json=excluded.raw_json",
@@ -115,7 +115,7 @@ def upsert_message(m: dict) -> None:
 
 def set_cursor(chat_id: int, last_message_id: int, chat_title) -> None:
     d1(
-        "INSERT INTO chat_cursors (chat_id, last_message_id, chat_title, updated_at) VALUES (?1,?2,?3,?4) "
+        "INSERT INTO chat_cursors (chat_id, last_message_id, chat_title, updated_at) VALUES (?,?,?,?) "
         "ON CONFLICT(chat_id) DO UPDATE SET "
         "last_message_id=MAX(chat_cursors.last_message_id, excluded.last_message_id), "
         "chat_title=COALESCE(excluded.chat_title, chat_cursors.chat_title), updated_at=excluded.updated_at",
