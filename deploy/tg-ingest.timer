@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Telegram ingest every 10 minutes
+
+[Timer]
+# First run 2 min after boot, then every 10 min after each run completes.
+OnBootSec=2min
+OnUnitActiveSec=10min
+# Catch up a run if the box was asleep/offline at the scheduled time.
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
