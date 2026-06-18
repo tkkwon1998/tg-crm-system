@@ -7,10 +7,19 @@ The rest of the pipeline stays on Cloudflare.
 ## Install (run on the VPS as root / with sudo)
 
 ```bash
-# 1. Code + a dedicated unprivileged user
-sudo useradd --system --create-home --home-dir /opt/tg-crm-system tgingest
+# 1. Code + a dedicated unprivileged user.
+#    NOTE: don't make /opt/tg-crm-system the user's home (--create-home would
+#    populate it with skeleton files and git clone would refuse the non-empty dir).
+sudo useradd --system --shell /usr/sbin/nologin tgingest
 sudo git clone https://github.com/tkkwon1998/tg-crm-system /opt/tg-crm-system
 sudo chown -R tgingest:tgingest /opt/tg-crm-system
+
+# If you already ran the old `useradd --create-home --home-dir /opt/tg-crm-system`
+# (so the dir exists and clone fails), initialize the repo IN PLACE instead:
+#   sudo -u tgingest git -C /opt/tg-crm-system init -q
+#   sudo -u tgingest git -C /opt/tg-crm-system remote add origin https://github.com/tkkwon1998/tg-crm-system
+#   sudo -u tgingest git -C /opt/tg-crm-system fetch -q --depth 1 origin main
+#   sudo -u tgingest git -C /opt/tg-crm-system checkout -q -f -b main FETCH_HEAD
 
 # 2. Python venv with telethon
 sudo -u tgingest python3 -m venv /opt/tg-crm-system/.venv
