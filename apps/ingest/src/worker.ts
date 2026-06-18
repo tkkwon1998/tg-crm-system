@@ -34,12 +34,13 @@ import {
  */
 export class IngestContainer extends Container<Env> {
   defaultPort = 8080;
-  // Keep the instance SHORTER-lived than the 60s cron interval so it idles out
-  // and recycles between runs. This (a) matches the spec's ephemeral
-  // "connect → fetch → exit" model / scale-to-zero billing, and (b) guarantees
-  // each run boots the latest deployed image — a warm instance (sleepAfter >
-  // cron interval) would keep serving a stale image forever after a deploy.
-  sleepAfter = '20s';
+  // sleepAfter MUST exceed the longest single /fetch (the Worker aborts at
+  // CONTAINER_TIMEOUT_MS=150s), or the idle timer kills the container mid-request
+  // (SIGTERM/143) — which is exactly what broke ingest: a slow Telegram connect
+  // ran past the old 20s sleep and got guillotined. 3m > 150s keeps the instance
+  // alive for the whole request, yet it still sleeps long before the next 10-min
+  // cron, so it recycles between runs (fresh image, scale-to-zero).
+  sleepAfter = '3m';
 
   // Forward the account credentials from Worker secrets into the container env.
   // envVars is read at container start; the Worker sets these before invoking.
