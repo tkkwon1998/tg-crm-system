@@ -39,10 +39,39 @@ import datetime
 import json
 import logging
 import os
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+
+# Raw-TCP connectivity probe targets. Control = general egress; the rest are
+# Telegram production DC IPs on 443 and 80. Distinguishes a general-egress block
+# (even control fails) vs. a Telegram-IP block (control OK, all TG fail) vs. a
+# port-specific block (e.g. :443 fails but :80 works).
+_PROBE_TARGETS = [
+    ("control_1.1.1.1:443", "1.1.1.1", 443),
+    ("tg_dc2:443", "149.154.167.51", 443),
+    ("tg_dc2:80", "149.154.167.51", 80),
+    ("tg_dc4:443", "149.154.167.91", 443),
+    ("tg_dc4:80", "149.154.167.91", 80),
+]
+
+
+def _probe_connectivity(timeout: float = 5.0) -> str:
+    """Try a raw TCP connect to each target; return a compact OK/<error> summary."""
+    out = []
+    for label, host, port in _PROBE_TARGETS:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect((host, port))
+            out.append(f"{label}=OK")
+        except Exception as exc:  # noqa: BLE001
+            out.append(f"{label}={type(exc).__name__}")
+        finally:
+            s.close()
+    return "; ".join(out)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -117,11 +146,11 @@ async def _fetch(req: dict, headers) -> dict:
     # Fail FAST with a precise error instead of hanging until the Worker's 150s
     # abort: a dead/blocked session can make connect() or the auth check hang.
     try:
-        await asyncio.wait_for(client.connect(), timeout=20)
+        await asyncio.wait_for(client.connect(), timeout=15)
     except asyncio.TimeoutError:
+        probe = _probe_connectivity()
         raise RuntimeError(
-            "telegram connect timed out after 20s — network issue or the account/session is "
-            "being blocked by Telegram (regenerate TG_SESSION; the account may be restricted)"
+            f"telegram connect timed out after 15s. connectivity probe [{probe}]"
         )
     try:
         authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=20)
