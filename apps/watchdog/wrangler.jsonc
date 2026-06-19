@@ -24,11 +24,11 @@
   // SLACK_WEBHOOK_URL + HEALTHCHECK_URL are SECRETS — set via `wrangler secret put`.
   "vars": {
     // Alert if the ingest heartbeat is older than this many seconds — i.e. ingest
-    // has not completed a run (cron not firing / worker erroring). LIVENESS check,
-    // independent of message traffic, so a quiet inbox never pages. Ingest cron is
-    // every 10 min; 2400s = 40 min tolerates ~3 missed runs before paging. Keep
-    // this comfortably ABOVE the ingest interval or it will false-alarm.
-    "INGEST_MAX_SILENCE_SECONDS": 2400,
+    // has not completed a run. LIVENESS check, independent of message traffic, so
+    // a quiet inbox never pages. Ingest now runs hourly (VPS systemd timer);
+    // 7200s = 2h tolerates one missed run before paging. Keep this comfortably
+    // ABOVE the ingest interval or it will false-alarm.
+    "INGEST_MAX_SILENCE_SECONDS": 7200,
     // Alert if crm_proposals 'pending' count exceeds this ceiling (apply stalled
     // / review backlog runaway).
     "PENDING_PROPOSALS_CEILING": 200,
