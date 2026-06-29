@@ -14,10 +14,25 @@ D1_FLAG="${D1_FLAG:---remote}"
 WRANGLER="pnpm exec wrangler"
 
 q() {
-  # Run one D1 query and print results as a borderless table.
-  ${WRANGLER} d1 execute "${DB_NAME}" "${D1_FLAG}" --command "$1" 2>/dev/null || {
-    echo "  (query failed — is the DB created/migrated? try: make migrate)"
-  }
+  # Run one D1 query and print just the result rows, tidily. Newer wrangler wraps
+  # output in ANSI codes + a verbose meta block on a merged stream, so we strip
+  # ANSI, find the JSON array, and print only the rows. --config points wrangler
+  # at the shared DB binding (there's no wrangler.jsonc at the repo root).
+  ${WRANGLER} d1 execute "${DB_NAME}" "${D1_FLAG}" --config packages/db/wrangler.jsonc --command "$1" 2>&1 | python3 -c '
+import sys, re, json
+t = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", sys.stdin.read())
+i = t.find("[")
+if i < 0:
+    print("  (query failed — is the DB created/migrated? try: make migrate)"); sys.exit()
+try:
+    rows = json.loads(t[i:])[0]["results"]
+except Exception:
+    print("  (could not parse wrangler output)"); sys.exit()
+if not rows:
+    print("  (no rows)")
+for r in rows:
+    print("  " + "   ".join(f"{k}={v}" for k, v in r.items()))
+'
 }
 
 hr() { printf '%*s\n' 64 '' | tr ' ' '-'; }
